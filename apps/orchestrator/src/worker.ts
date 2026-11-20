@@ -19,6 +19,7 @@ import {
 import type { Logger } from "./log.ts";
 import { hashFacts } from "./primary-evidence.ts";
 import { formatFailureNotice } from "./report.ts";
+import type { ResumeRequest } from "./run.ts";
 import { SEOUL_TIMEZONE } from "./weekly-budget.ts";
 
 export interface WorkerOptions {
@@ -29,6 +30,7 @@ export interface WorkerOptions {
   redact: Redactor;
   log: Logger;
   queueName?: string;
+  onResume?(request: ResumeRequest): Promise<void>;
 }
 
 /** The shared queue serializes observation, scheduling, and investigation across worker processes. */
@@ -50,6 +52,7 @@ export async function createIncidentWorker(options: WorkerOptions) {
     { name: schedulerName, opts: INCIDENT_JOB_OPTIONS },
   );
 
+  const RESUME_JOB = "graph-resume";
   const worker = new Worker(
     queueName,
     async (job) => {
@@ -70,6 +73,10 @@ export async function createIncidentWorker(options: WorkerOptions) {
           incidents: active.length,
           mode: options.investigateMode,
         });
+        return;
+      }
+      if (job.name === RESUME_JOB) {
+        await options.onResume?.(job.data as ResumeRequest);
         return;
       }
       if (job.name === MANUAL_JOB_NAME) {
@@ -116,6 +123,14 @@ export async function createIncidentWorker(options: WorkerOptions) {
   worker.on("error", (error) => log.error("worker error", { error: describeError(error, redact) }));
 
   return {
+    async enqueueResume(request: ResumeRequest) {
+      await queue.add(RESUME_JOB, request, {
+        ...INCIDENT_JOB_OPTIONS,
+        jobId: `resume-${hashFacts([request.incidentId, request.approvalId]).slice(0, 32)}`,
+        removeOnComplete: true,
+        removeOnFail: true,
+      });
+    },
     async enqueueManual(project: ProjectId, updateId: number) {
       await queue.add(
         MANUAL_JOB_NAME,

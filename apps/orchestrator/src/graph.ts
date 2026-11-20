@@ -2,10 +2,12 @@ import type { ModelPricing } from "@incidentpulse/config";
 import { describeError, type Redactor } from "@incidentpulse/redact";
 import {
   type Category,
+  type DebateVerdict,
   type Evidence,
   type Hypothesis,
   type IncidentState,
   IncidentStateSchema,
+  PROJECT_DISPLAY_NAMES,
   type ProjectId,
   type Signal,
 } from "@incidentpulse/schemas";
@@ -14,14 +16,19 @@ import {
   Annotation,
   type BaseCheckpointSaver,
   END,
+  interrupt,
   Send,
   START,
   StateGraph,
 } from "@langchain/langgraph";
+import type { ActionControls, ActionFlow } from "./action-flow.ts";
 import { WeeklyBudgetExhausted } from "./agents/sdk.ts";
 import { costOf, sumUsage } from "./cost.ts";
+import { DEBATE_RESERVE_USD, DebateUnavailable, type DebateVerifier } from "./debate.ts";
+import { evidenceForModel } from "./evidence.ts";
 import { scrubText } from "./guardrails.ts";
 import type { PrimaryEvidence } from "./primary-evidence.ts";
+import type { RemediationProposer } from "./remediation-proposer.ts";
 import {
   type EscalationReason,
   formatEscalation,
@@ -69,6 +76,16 @@ const IncidentAnnotation = Annotation.Root({
     default: () => [],
   }),
   hypotheses: Annotation<Hypothesis[]>({ reducer: (_a, b) => b, default: () => [] }),
+  verdict: Annotation<DebateVerdict | null>(),
+  debateRounds: Annotation<number>({ reducer: sum, default: () => 0 }),
+  remediation: Annotation<IncidentState["remediation"]>(),
+  approval: Annotation<IncidentState["approval"]>(),
+  approvalId: Annotation<string | undefined>(),
+  actionAttempt: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
+  execution: Annotation<IncidentState["execution"]>(),
+  recovery: Annotation<IncidentState["recovery"]>(),
+  actionFailure: Annotation<"remediation" | "recovery" | null>(),
+  workflowStatus: Annotation<"waiting_human" | "rejected" | "recovered" | undefined>(),
   iteration: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
   /** Nodes return a delta; the reducer keeps the running total (SPEC §3.1 costUsd). */
   costUsd: Annotation<number>({ reducer: sum, default: () => 0 }),
@@ -108,11 +125,21 @@ export interface GraphDeps {
   weeklyBudget: WeeklyBudget;
   /** Live model requests already charge the ledger. Mocks are accounted for by node. */
   requestPricing?: ModelPricing;
+  debate?: { mode: "auto" | "always" | "off"; client?: DebateVerifier };
+  controls?: ActionControls;
+  actions?: {
+    flow: ActionFlow;
+    propose: RemediationProposer;
+    recover(state: GraphState): Promise<{ ok: boolean; check: string }>;
+  };
   checkpointer?: BaseCheckpointSaver;
   now?: () => Date;
 }
 
 interface InvestigatePayload {
+  incidentId: string;
+  iteration: number;
+  missing?: string[];
   specialist: SpecialistName;
   project: ProjectId;
   signal: Signal;
@@ -130,6 +157,11 @@ export function toIncidentState(state: GraphState): IncidentState {
     ...(state.category ? { category: state.category } : {}),
     evidence: state.evidence,
     hypotheses: state.hypotheses,
+    ...(state.verdict ? { verdict: state.verdict } : {}),
+    ...(state.remediation ? { remediation: state.remediation } : {}),
+    ...(state.approval ? { approval: state.approval } : {}),
+    ...(state.execution ? { execution: state.execution } : {}),
+    ...(state.recovery ? { recovery: state.recovery } : {}),
     iteration: state.iteration,
     costUsd: state.costUsd,
   };
@@ -162,6 +194,19 @@ export function buildIncidentGraph(deps: GraphDeps) {
     if (incidentCostUsd >= deps.budgetUsd) return "incident";
     return null;
   };
+
+  const waitIfStopped = async (incidentId: string) => {
+    while (await deps.controls?.isStopped()) {
+      await deps.controls?.markPaused(incidentId);
+      interrupt({ kind: "paused", incidentId });
+    }
+  };
+  const gated =
+    <S extends { incidentId: string }, R>(node: (s: S) => Promise<R>) =>
+    async (state: S): Promise<R> => {
+      await waitIfStopped(state.incidentId);
+      return node(state);
+    };
 
   const intake = async (state: GraphState) => {
     // Weekly gate: when this week's budget is already spent, no LLM call is made at all.
@@ -260,6 +305,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
         trace: [
           event("investigate", "specialist_failed", {
             specialist: payload.specialist,
+            iteration: payload.iteration,
             error: "not configured",
           }),
         ],
@@ -272,10 +318,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
         triageCategory: payload.triageCategory,
         triageReason: payload.triageReason,
         ...(payload.quickEvidence ? { quickEvidence: payload.quickEvidence } : {}),
+        ...(payload.missing ? { missing: payload.missing } : {}),
       });
       const weeklyTotal = await account(r.costUsd);
       return {
-        evidence: r.evidence,
+        evidence: payload.iteration
+          ? r.evidence.map((e) => ({ ...e, id: `${e.id}-r${payload.iteration}` }))
+          : r.evidence,
         costUsd: r.costUsd,
         weeklySpentUsd: weeklyTotal,
         unsafeAttempts: r.blockedCalls,
@@ -283,6 +332,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
         trace: [
           event("investigate", "specialist_done", {
             specialist: payload.specialist,
+            iteration: payload.iteration,
             startedAt,
             toolCalls: r.toolCalls,
             evidence: r.evidence.length,
@@ -302,6 +352,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
         trace: [
           event("investigate", "specialist_failed", {
             specialist: payload.specialist,
+            iteration: payload.iteration,
             error: describeError(error, deps.redact),
           }),
         ],
@@ -310,8 +361,12 @@ export function buildIncidentGraph(deps: GraphDeps) {
   };
 
   const join = async (state: GraphState) => {
-    const chosen = state.triageResult?.specialists.length ?? 0;
-    const failed = state.trace.filter((e) => e.event === "specialist_failed").length;
+    const chosen = state.iteration
+      ? SPECIALISTS.filter((name) => deps.specialists[name]?.isAvailable(state.project)).length
+      : (state.triageResult?.specialists.length ?? 0);
+    const failed = state.trace.filter(
+      (e) => e.event === "specialist_failed" && (e.detail?.iteration ?? 0) === state.iteration,
+    ).length;
     const spent = await deps.weeklyBudget.spentUsd(now());
     if (spent < deps.weeklyBudgetUsd && chosen > 0 && failed >= chosen)
       throw new Error("Every specialist failed; nothing to synthesize");
@@ -340,6 +395,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
       return {
         category: result.category,
         hypotheses: result.hypotheses,
+        verdict: null,
         costUsd: result.costUsd,
         weeklySpentUsd: weeklyTotal,
         overBudget: classify(state.costUsd + result.costUsd, weeklyTotal),
@@ -367,6 +423,254 @@ export function buildIncidentGraph(deps: GraphDeps) {
     }
   };
 
+  const verify = async (state: GraphState) => {
+    const debate = deps.debate;
+    const distinct = evidenceForModel(state.evidence);
+    const sourceCount = new Set(distinct.map((e) => e.source)).size;
+    if (
+      !debate ||
+      debate.mode === "off" ||
+      state.debateRounds >= 2 ||
+      (debate.mode === "auto" && (state.hypotheses[0]?.confidence ?? 0) >= 0.9 && sourceCount > 1)
+    ) {
+      return { trace: debate ? [event("verify", "debate_skipped")] : [] };
+    }
+    if (!debate.client)
+      return { trace: [event("verify", "debate_unavailable", { reason: "not configured" })] };
+    const at = now();
+    const spent = await deps.weeklyBudget.spentUsd(at);
+    if (
+      spent + DEBATE_RESERVE_USD > deps.weeklyBudgetUsd ||
+      state.costUsd + DEBATE_RESERVE_USD > deps.budgetUsd
+    ) {
+      return {
+        overBudget:
+          spent + DEBATE_RESERVE_USD > deps.weeklyBudgetUsd
+            ? ("weekly" as const)
+            : ("incident" as const),
+        weeklySpentUsd: spent,
+      };
+    }
+    await deps.weeklyBudget.addUsd(DEBATE_RESERVE_USD, at);
+    let result: Awaited<ReturnType<DebateVerifier["verify"]>>;
+    try {
+      result = await debate.client.verify(distinct, state.hypotheses);
+    } catch (error) {
+      // A timeout may have incurred provider usage. Release only a known pre-model failure.
+      const beforeModel = error instanceof DebateUnavailable && error.beforeModel;
+      const cost = beforeModel ? 0 : DEBATE_RESERVE_USD;
+      const total = beforeModel
+        ? await deps.weeklyBudget.releaseUsd(DEBATE_RESERVE_USD, at)
+        : spent + DEBATE_RESERVE_USD;
+      return {
+        debateRounds: 1,
+        costUsd: cost,
+        weeklySpentUsd: total,
+        overBudget: classify(state.costUsd + cost, total),
+        trace: [
+          event("verify", "debate_unavailable", { reason: describeError(error, deps.redact) }),
+        ],
+      };
+    }
+    const received = Math.round(result.costUsd * 1_000_000) / 1_000_000;
+    const weeklyTotal =
+      received > DEBATE_RESERVE_USD
+        ? await deps.weeklyBudget.addUsd(received - DEBATE_RESERVE_USD, at)
+        : await deps.weeklyBudget.releaseUsd(DEBATE_RESERVE_USD - received, at);
+    const verdict = result.verdict;
+    const grounded = state.hypotheses.some((h) => h.id === verdict.hypothesisId);
+    return {
+      verdict: grounded
+        ? {
+            ...verdict,
+            dissent: deps.redact(scrubText(verdict.dissent).text),
+            missing: verdict.missing.map((item) => deps.redact(scrubText(item).text)),
+          }
+        : null,
+      debateRounds: 1,
+      costUsd: result.costUsd,
+      weeklySpentUsd: weeklyTotal,
+      overBudget: classify(state.costUsd + result.costUsd, weeklyTotal),
+      trace: [
+        event("verify", grounded ? "debate_verdict" : "debate_unavailable", {
+          confidence: verdict.confidence,
+          missing: verdict.missing.length,
+          round: state.debateRounds + 1,
+        }),
+      ],
+    };
+  };
+
+  const reinvestigate = async (state: GraphState) => ({
+    iteration: state.iteration + 1,
+    trace: [event("reinvestigate", "collect_missing", { missing: state.verdict?.missing ?? [] })],
+  });
+  const fanout = (state: GraphState, repeat = false) => {
+    if (!state.triageResult) return [];
+    const chosen = repeat
+      ? SPECIALISTS.filter((name) => deps.specialists[name]?.isAvailable(state.project))
+      : state.triageResult.specialists;
+    return chosen.map(
+      (specialist) =>
+        new Send("investigate", {
+          incidentId: state.incidentId,
+          iteration: state.iteration,
+          specialist,
+          project: state.project,
+          signal: state.signal,
+          triageCategory: state.triageResult?.category ?? "unknown",
+          triageReason: state.triageResult?.reason ?? "",
+          ...(repeat
+            ? { missing: state.verdict?.missing ?? [] }
+            : { quickEvidence: state.evidence }),
+        } satisfies InvestigatePayload),
+    );
+  };
+
+  const propose = async (state: GraphState) => {
+    const actions = deps.actions;
+    if (!actions) return {};
+    const spent = await deps.weeklyBudget.spentUsd(now());
+    const blocked = classify(state.costUsd, spent);
+    if (blocked) return { overBudget: blocked, weeklySpentUsd: spent };
+    const existing = await actions.flow.approvals.find(state.incidentId, state.actionAttempt);
+    let row = existing;
+    let proposalCost = 0;
+    let total = spent;
+    if (!row) {
+      try {
+        const proposal = await actions.propose(state);
+        proposalCost = proposal.costUsd;
+        total = await account(proposalCost);
+        const overBudget = classify(state.costUsd + proposalCost, total);
+        if (overBudget) return { costUsd: proposalCost, weeklySpentUsd: total, overBudget };
+        if (!proposal.book)
+          return {
+            remediation: undefined,
+            costUsd: proposalCost,
+            weeklySpentUsd: total,
+            ...(state.actionAttempt > 0 || proposal.rejected
+              ? { actionFailure: "remediation" as const }
+              : {}),
+            trace: [event("propose", proposal.rejected ? "runbook_rejected" : "no_runbook")],
+          };
+        const result = await actions.flow.dryRun(proposal.book);
+        if (!result.ok)
+          return {
+            actionFailure: "remediation" as const,
+            costUsd: proposalCost,
+            weeklySpentUsd: total,
+            trace: [event("propose", "dry_run_failed", { output: result.output.slice(0, 350) })],
+          };
+        row = await actions.flow.approvals.prepare({
+          incidentId: state.incidentId,
+          project: state.project,
+          check: state.signal.check,
+          attempt: state.actionAttempt,
+          runbookId: proposal.book.runbookId,
+          params: proposal.book.params,
+          risk: proposal.book.risk,
+          dryRunOutput: result.output,
+          details: deps
+            .redact(state.evidence.map((e) => `[${e.id}] ${e.excerpt}`).join("\n"))
+            .slice(0, 2900),
+        });
+      } catch (error) {
+        if (error instanceof WeeklyBudgetExhausted) return whenExhausted(error);
+        throw error;
+      }
+    }
+    return {
+      approvalId: row.id,
+      remediation: {
+        runbookId: row.runbookId,
+        params: row.params,
+        risk: row.risk,
+        dryRunOutput: row.dryRunOutput,
+      },
+      approval: { status: "pending" as const },
+      costUsd: proposalCost,
+      weeklySpentUsd: total,
+      trace: [
+        event("propose", "dry_run_ok", { runbook: row.runbookId, attempt: state.actionAttempt }),
+      ],
+    };
+  };
+
+  const requestApproval = async (state: GraphState) => {
+    const row = state.approvalId
+      ? await deps.actions?.flow.approvals.get(state.approvalId)
+      : undefined;
+    if (!row || !deps.actions) throw new Error("Missing approval record");
+    await deps.actions.flow.notify(row, state, deps.budgetUsd, deps.weeklyBudgetUsd);
+    return { trace: [event("request_approval", "approval_requested")] };
+  };
+
+  const awaitApproval = async (state: GraphState) => {
+    // The approval interrupt is always first, so the resume cursor cannot be shifted by a new /stop.
+    await deps.controls?.isStopped();
+    interrupt({ kind: "approval", approvalId: state.approvalId });
+    await waitIfStopped(state.incidentId);
+    const row = state.approvalId
+      ? await deps.actions?.flow.approvals.get(state.approvalId)
+      : undefined;
+    if (!row || row.status === "pending") throw new Error("No persisted approval decision");
+    return {
+      approval: {
+        status: row.status,
+        ...(row.decidedBy ? { by: row.decidedBy } : {}),
+        ...(row.decidedAt ? { at: row.decidedAt.toISOString() } : {}),
+      },
+      trace: [event("await_approval", row.status, { by: row.decidedBy ?? "system" })],
+    };
+  };
+
+  const execute = async (state: GraphState) => {
+    const row = state.approvalId
+      ? await deps.actions?.flow.approvals.get(state.approvalId)
+      : undefined;
+    if (row?.status !== "approved" || !deps.actions) throw new Error("No approved runbook");
+    const execution = await deps.actions.flow.execute(row);
+    return {
+      execution,
+      trace: [event("execute", "runbook_finished", { ok: execution.ok, runbook: row.runbookId })],
+    };
+  };
+
+  const verifyRecovery = async (state: GraphState) => {
+    if (!deps.actions) return {};
+    const result = await deps.actions.recover(state);
+    const recovery = { ...result, at: now().toISOString() };
+    const retry = !result.ok && state.actionAttempt < 2;
+    return {
+      recovery,
+      actionAttempt: retry ? state.actionAttempt + 1 : state.actionAttempt,
+      ...(retry ? { remediation: undefined, approval: undefined, approvalId: undefined } : {}),
+      ...(!result.ok && !retry ? { actionFailure: "recovery" as const } : {}),
+      trace: [
+        event("verify_recovery", result.ok ? "recovered" : "still_down", { check: result.check }),
+      ],
+    };
+  };
+
+  const close = async (state: GraphState) => {
+    const name = PROJECT_DISPLAY_NAMES[state.project];
+    if (state.recovery?.ok) {
+      await deps.actions?.flow.approvals.closeForRecovery(state.project, state.signal.check);
+      await deps.notifier.send(
+        `🟢 ${name} · #${state.incidentId} · Tiklandi (${state.recovery.check})`,
+      );
+      return { workflowStatus: "recovered" as const };
+    }
+    const expired = state.approval?.status === "expired";
+    await deps.notifier.send(
+      expired
+        ? `🟠 ${name} · #${state.incidentId} · tasdiqlash muddati tugadi, inson ko‘rigi kutilmoqda.`
+        : `⚪ ${name} · #${state.incidentId} · tuzatish taklifi rad etildi.`,
+    );
+    return { workflowStatus: expired ? ("waiting_human" as const) : ("rejected" as const) };
+  };
+
   const report = async (state: GraphState) => {
     // Refuse to publish anything that does not satisfy the shared IncidentState contract.
     toIncidentState(state);
@@ -375,6 +679,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
       project: state.project,
       evidence: state.evidence,
       hypotheses: state.hypotheses,
+      verdict: state.verdict ?? undefined,
       costUsd: state.costUsd,
       overBudget: state.overBudget,
       budgetUsd: deps.budgetUsd,
@@ -391,7 +696,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
         ? "weekly_budget"
         : state.guardrailRejection
           ? "guardrail"
-          : "incident_budget";
+          : (state.actionFailure ?? "incident_budget");
     const text = formatEscalation({
       incidentId: state.incidentId,
       project: state.project,
@@ -409,59 +714,85 @@ export function buildIncidentGraph(deps: GraphDeps) {
     };
   };
 
-  return (
-    new StateGraph(IncidentAnnotation)
-      .addNode("intake", intake)
-      .addNode("triage", triage)
-      // `investigate` receives the Send payload, not the graph state.
-      .addNode(
-        "investigate",
-        investigate as unknown as (s: GraphState) => Promise<Partial<GraphState>>,
-      )
-      .addNode("join", join)
-      .addNode("synthesize", synthesize)
-      .addNode("report", report)
-      .addNode("escalate", escalate)
-      .addEdge(START, "intake")
-      // Budget guards: once a budget is spent, no further LLM call is made.
-      .addConditionalEdges("intake", (s: GraphState) => (s.overBudget ? "escalate" : "triage"), {
-        escalate: "escalate",
-        triage: "triage",
-      })
-      // Fan-out: one parallel `investigate` run per specialist the triage agent chose.
-      .addConditionalEdges(
-        "triage",
-        (s: GraphState) =>
-          s.overBudget || !s.triageResult
-            ? "escalate"
-            : s.triageResult.specialists.map(
-                (specialist) =>
-                  new Send("investigate", {
-                    specialist,
-                    project: s.project,
-                    signal: s.signal,
-                    triageCategory: s.triageResult?.category ?? "unknown",
-                    triageReason: s.triageResult?.reason ?? "",
-                    quickEvidence: s.evidence,
-                  } satisfies InvestigatePayload),
-              ),
-        ["investigate", "escalate"],
-      )
-      .addEdge("investigate", "join")
-      .addConditionalEdges("join", (s: GraphState) => (s.overBudget ? "escalate" : "synthesize"), {
-        escalate: "escalate",
-        synthesize: "synthesize",
-      })
-      .addConditionalEdges(
-        "synthesize",
-        (s: GraphState) =>
-          s.guardrailRejection || s.overBudget === "weekly" ? "escalate" : "report",
-        { escalate: "escalate", report: "report" },
-      )
-      .addEdge("report", END)
-      .addEdge("escalate", END)
-      .compile(deps.checkpointer ? { checkpointer: deps.checkpointer } : {})
-  );
+  return new StateGraph(IncidentAnnotation)
+    .addNode("intake", gated(intake))
+    .addNode("triage", gated(triage))
+    .addNode(
+      "investigate",
+      gated(investigate) as unknown as (s: GraphState) => Promise<Partial<GraphState>>,
+    )
+    .addNode("join", gated(join))
+    .addNode("synthesize", gated(synthesize))
+    .addNode("verify", gated(verify))
+    .addNode("reinvestigate", gated(reinvestigate))
+    .addNode("propose", gated(propose))
+    .addNode("request_approval", gated(requestApproval))
+    .addNode("await_approval", awaitApproval)
+    .addNode("execute", gated(execute))
+    .addNode("verify_recovery", gated(verifyRecovery))
+    .addNode("close", gated(close))
+    .addNode("report", gated(report))
+    .addNode("escalate", gated(escalate))
+    .addEdge(START, "intake")
+    .addConditionalEdges("intake", (s) => (s.overBudget ? "escalate" : "triage"), [
+      "escalate",
+      "triage",
+    ])
+    .addConditionalEdges(
+      "triage",
+      (s) => (s.overBudget || !s.triageResult ? "escalate" : fanout(s)),
+      ["investigate", "escalate"],
+    )
+    .addEdge("investigate", "join")
+    .addConditionalEdges("join", (s) => (s.overBudget ? "escalate" : "synthesize"), [
+      "escalate",
+      "synthesize",
+    ])
+    .addConditionalEdges(
+      "synthesize",
+      (s) => {
+        if (s.guardrailRejection || s.overBudget === "weekly") return "escalate";
+        if (s.overBudget) return deps.actions ? "escalate" : "report";
+        return deps.debate ? "verify" : deps.actions ? "propose" : "report";
+      },
+      ["escalate", "verify", "propose", "report"],
+    )
+    .addConditionalEdges(
+      "verify",
+      (s) => {
+        if (s.overBudget) return "escalate";
+        if (s.verdict && s.verdict.confidence < 0.7 && s.iteration < 3) return "reinvestigate";
+        return deps.actions ? "propose" : "report";
+      },
+      ["escalate", "reinvestigate", "propose", "report"],
+    )
+    .addConditionalEdges("reinvestigate", (s) => fanout(s, true), ["investigate"])
+    .addConditionalEdges(
+      "propose",
+      (s) =>
+        s.overBudget || s.actionFailure
+          ? "escalate"
+          : s.remediation
+            ? "request_approval"
+            : "report",
+      ["escalate", "request_approval", "report"],
+    )
+    .addEdge("request_approval", "await_approval")
+    .addConditionalEdges(
+      "await_approval",
+      (s) => (s.approval?.status === "approved" ? "execute" : "close"),
+      ["execute", "close"],
+    )
+    .addEdge("execute", "verify_recovery")
+    .addConditionalEdges(
+      "verify_recovery",
+      (s) => (s.recovery?.ok ? "close" : s.actionFailure ? "escalate" : "propose"),
+      ["close", "escalate", "propose"],
+    )
+    .addEdge("close", END)
+    .addEdge("report", END)
+    .addEdge("escalate", END)
+    .compile(deps.checkpointer ? { checkpointer: deps.checkpointer } : {});
 }
 
 export type IncidentGraph = ReturnType<typeof buildIncidentGraph>;

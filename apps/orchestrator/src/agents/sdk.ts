@@ -34,6 +34,7 @@ export function limitModelSpend(
     limitUsd: number;
     pricing: ModelPricing;
     now?: () => Date;
+    strictBudget?: boolean;
   },
 ): Model {
   const now = options.now ?? (() => new Date());
@@ -44,6 +45,15 @@ export function limitModelSpend(
         const at = now();
         const spent = await options.budget.spentUsd(at);
         if (spent >= options.limitUsd) throw new WeeklyBudgetExhausted(spent);
+        if (options.strictBudget) {
+          // Conservative bytes-as-tokens estimate plus padding for provider tool and message framing.
+          const upperInput = Buffer.byteLength(JSON.stringify(request)) + 4096;
+          const upperOutput = request.modelSettings.maxTokens ?? 900;
+          const upperUsd =
+            (upperInput * options.pricing.inputPerM + upperOutput * options.pricing.outputPerM) /
+            1_000_000;
+          if (spent + upperUsd > options.limitUsd) throw new WeeklyBudgetExhausted(spent);
+        }
         const response = await model.getResponse(request);
         await options.budget.addUsd(costOf(sumUsage([response.usage]), options.pricing), at);
         return response;

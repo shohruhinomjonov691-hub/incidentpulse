@@ -1,0 +1,10 @@
+id: certbot_nginx_issue
+category: tls
+risk: medium
+params: { domain: domains }
+prerequisite: missing_certificate_or_vhost
+dry_run:
+  - [certbot, certonly, --dry-run, --non-interactive, --webroot, -w, "{webroot}", -d, "{domain}"]
+run:
+  - [certbot, --nginx, -d, "{domain}", --non-interactive]
+  - [nginx, -t]

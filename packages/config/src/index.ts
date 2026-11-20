@@ -37,6 +37,14 @@ const EnvSchema = z.object({
   /** Hard stop per incident (SPEC §8). */
   INCIDENT_BUDGET_USD: z.coerce.number().positive().default(0.5),
   WEEKLY_BUDGET_USD: z.coerce.number().positive().default(0.5),
+  DEBATE_MODE: z.enum(["auto", "always", "off"]).default("auto"),
+  DEBATE_URL: z.url().default("http://127.0.0.1:8790"),
+  DEBATE_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(32_000),
+  DEBATE_SHARED_SECRET: z.string().min(32).optional(),
+  ACTION_EXEC_USER: z.string().min(1).optional(),
+  ACTIONS_ENABLED: z.enum(["true", "false"]).default("false"),
+  APPROVAL_HMAC_SECRET: z.string().min(32).optional(),
+  PROJECT_ACTION_SCOPES_JSON: z.string().optional(),
   INVESTIGATE_MODE: z.enum(["on_change", "weekly"]).default("on_change"),
   TELEGRAM_ALLOWED_USER_IDS: z
     .string()
@@ -208,6 +216,14 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "REDIS_URL",
     "INCIDENT_BUDGET_USD",
     "WEEKLY_BUDGET_USD",
+    "DEBATE_MODE",
+    "DEBATE_URL",
+    "DEBATE_TIMEOUT_MS",
+    "DEBATE_SHARED_SECRET",
+    "ACTIONS_ENABLED",
+    "ACTION_EXEC_USER",
+    "APPROVAL_HMAC_SECRET",
+    "PROJECT_ACTION_SCOPES_JSON",
     "INVESTIGATE_MODE",
     "TELEGRAM_ALLOWED_USER_IDS",
     "PROJECT_DOMAINS_JSON",
@@ -225,7 +241,41 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     overrides.cachedInput = c.MODEL_PRICE_CACHED_INPUT_PER_M;
   }
   if (c.MODEL_PRICE_OUTPUT_PER_M !== undefined) overrides.output = c.MODEL_PRICE_OUTPUT_PER_M;
+  const actionsEnabled = c.ACTIONS_ENABLED === "true";
+  if (actionsEnabled && (!c.APPROVAL_HMAC_SECRET || !c.TELEGRAM_ALLOWED_USER_IDS.size)) {
+    throw new ConfigError([
+      "ACTIONS_ENABLED requires APPROVAL_HMAC_SECRET and TELEGRAM_ALLOWED_USER_IDS",
+    ]);
+  }
+  const scope = z.strictObject({
+    containers: z.array(z.string()).optional(),
+    pm2: z.array(z.string()).optional(),
+    compose: z.strictObject({ name: z.string(), file: z.string() }).optional(),
+    nginx: z.boolean().optional(),
+    webroot: z.string().optional(),
+  });
+  const projectDomains = resolveProjectDomains(c.PROJECT_DOMAINS_JSON);
+  const parsedScopes = c.PROJECT_ACTION_SCOPES_JSON
+    ? z
+        .partialRecord(ProjectIdSchema, scope)
+        .safeParse(parseJson("PROJECT_ACTION_SCOPES_JSON", c.PROJECT_ACTION_SCOPES_JSON))
+    : undefined;
+  if (parsedScopes && !parsedScopes.success)
+    throw new ConfigError(["PROJECT_ACTION_SCOPES_JSON: wrong shape"]);
   return {
+    debateMode: c.DEBATE_MODE,
+    debateUrl: c.DEBATE_URL,
+    debateTimeoutMs: c.DEBATE_TIMEOUT_MS,
+    debateSecret: c.DEBATE_SHARED_SECRET,
+    actionsEnabled,
+    actionExecUser: c.ACTION_EXEC_USER,
+    approvalSecret: c.APPROVAL_HMAC_SECRET,
+    actionScopes: Object.fromEntries(
+      Object.entries(parsedScopes?.data ?? {}).map(([project, settings]) => [
+        project,
+        { ...settings, domains: projectDomains[project as ProjectId] },
+      ]),
+    ),
     openaiApiKey: c.OPENAI_API_KEY,
     model: c.OPENAI_MODEL,
     pricing: resolvePricing(c.OPENAI_MODEL, overrides),
@@ -237,7 +287,7 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     weeklyBudgetUsd: c.WEEKLY_BUDGET_USD,
     investigateMode: c.INVESTIGATE_MODE,
     telegramAllowedUserIds: c.TELEGRAM_ALLOWED_USER_IDS,
-    projectDomains: resolveProjectDomains(c.PROJECT_DOMAINS_JSON),
+    projectDomains,
     projectContainers: resolveProjectContainers(c.PROJECT_CONTAINERS_JSON),
     codetrail: {
       baseUrl: c.CODETRAIL_BASE_URL,

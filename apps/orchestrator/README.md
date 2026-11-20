@@ -1,12 +1,13 @@
 # @incidentpulse/orchestrator
 
-Incident graph (LangGraph.js, Postgres checkpointer) and BullMQ worker. **Phase 2: multi-agent.**
+Incident graph (LangGraph.js, Postgres checkpointer) and BullMQ worker. **Phase 4: verified, human-approved remediation.**
 
 ```
-intake ─► triage ──Send──► investigate ×N (parallel) ─► join ─► synthesize ─► report
-   │        │                 infra | logs | code                  │
-   │        └─ budget spent ──────────────────────────┐            └─ guardrail rejected twice ─┐
-   └─ this week's budget already spent ────────────────► escalate  ◄───────────────────────────────┘
+intake → triage → investigate ×N → join → synthesize → verify
+                                                 ↑         │
+                                                 └ missing facts
+                                                           ↓
+                 propose → await_approval → execute → verify_recovery → close
 ```
 
 - **triage** (Agents SDK `Agent` with **handoffs**): reads the signal and the quick `http_probe` / `tls_inspect` results, sets the SPEC §3.1 `category`, and **hands off** to a specialist
@@ -37,6 +38,13 @@ and the rule that evidence (and therefore the report) is never LLM-authored.
 - Set `TELEGRAM_ALLOWED_USER_IDS` and use `/investigate <project>` in `TELEGRAM_CHAT_ID` to investigate immediately with a fresh model run. The same budget applies.
 - `WEEKLY_BUDGET_USD` defaults to $0.50 across all projects and resets Monday at midnight in Seoul. `INCIDENT_BUDGET_USD` also defaults to $0.50. The worker checks the weekly ledger before each provider call and records response usage before admitting another. One already-started call can cross the threshold. Once exhausted, new investigations escalate without the LLM.
 - The same model (`gpt-5.4-mini`) receives compact tool results and deduplicated evidence, with output ceilings of 400, 480 and 900 tokens for triage, specialists and synthesis respectively.
+
+## Debate and approval
+
+- Set `DEBATE_MODE=auto` to verify a synthesis below 0.9 confidence or supported by fewer than two tool sources. `always` and `off` override the gate. If the Judge returns confidence below 0.7, the graph sends missing facts to the configured specialists. The graph permits two debate rounds and traces unavailability.
+- Enable actions with `ACTIONS_ENABLED=true` and an explicit project scope, approval secret, dedicated Unix account and Telegram user allowlist. A proposal passes registry validation and a dry run before LangGraph pauses for Telegram approval.
+- Approvals expire after 60 minutes. Expired incidents wait for human review with reminders at most every two hours. An approved action has a fresh 15-minute token. Recovery reruns the configured health probe. Two failed-recovery retries may create new proposals, each requiring its own approval.
+- `/stop` prevents nodes and new execution steps from starting. A subprocess already executing may finish. `/resume` continues saved checkpoints. `/status` shows the stop flag, paused graph count and weekly spend.
 
 ## Run
 

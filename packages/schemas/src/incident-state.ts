@@ -18,6 +18,7 @@ export const ProjectIdSchema = z.enum([
 // Initial runbooks (SPEC.md §5.3).
 export const RunbookIdSchema = z.enum([
   "certbot_renew",
+  "certbot_nginx_issue",
   "nginx_reload",
   "docker_restart",
   "pm2_restart",
@@ -75,6 +76,7 @@ export const IncidentStateSchema = z.strictObject({
       hypothesisId: z.string(),
       confidence: Confidence,
       dissent: z.string().optional(),
+      missing: z.array(z.string()).optional(),
     })
     .optional(),
   /** Investigate loop counter, max 3. */

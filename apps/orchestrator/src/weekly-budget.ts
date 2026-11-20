@@ -2,6 +2,7 @@
 export interface WeeklyBudget {
   spentUsd(now: Date): Promise<number>;
   addUsd(usd: number, now: Date): Promise<number>;
+  releaseUsd(usd: number, now: Date): Promise<number>;
 }
 
 export interface RedisLike {
@@ -52,6 +53,9 @@ export function createRedisWeeklyBudget(
       await redis.expire(k, KEY_TTL_SECONDS);
       return total / MICRO;
     },
+    async releaseUsd(usd, now) {
+      return (await redis.incrby(key(now), -toMicro(usd))) / MICRO;
+    },
   };
 }
 
@@ -64,6 +68,12 @@ export function createMemoryWeeklyBudget(initialUsd = 0, initialNow = new Date()
     async addUsd(usd, now) {
       const k = weekKey(now);
       const total = (totals.get(k) ?? 0) + toMicro(usd);
+      totals.set(k, total);
+      return total / MICRO;
+    },
+    async releaseUsd(usd, now) {
+      const k = weekKey(now);
+      const total = (totals.get(k) ?? 0) - toMicro(usd);
       totals.set(k, total);
       return total / MICRO;
     },

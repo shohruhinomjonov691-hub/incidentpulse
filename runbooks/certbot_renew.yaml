@@ -1,0 +1,10 @@
+id: certbot_renew
+category: tls
+risk: low
+params: { domain: domains }
+dry_run:
+  - [certbot, renew, --cert-name, "{domain}", --dry-run, --non-interactive, --no-directory-hooks]
+run:
+  - [certbot, renew, --cert-name, "{domain}", --non-interactive, --no-directory-hooks]
+  - [nginx, -t]
+  - [systemctl, reload, nginx]

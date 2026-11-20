@@ -5,7 +5,7 @@ waits for human approval, executes, verifies recovery and writes a postmortem.
 
 Full design: [docs/SPEC.md](docs/SPEC.md). Pinned versions: [docs/VERSIONS.md](docs/VERSIONS.md). Decisions: [docs/adr/](docs/adr/).
 
-**Status: Phase 2 (multi-agent).** Signal → change detection and cache → triage (handoffs) → parallel specialists → synthesis → Telegram. Automatic investigations can run on change or in a Sunday batch, with a shared $0.50 weekly LLM budget.
+**Status: Phase 4.** Signal → change detection and cache → triage → parallel specialists → synthesis → optional debate → optional human-approved runbook → recovery check. Automatic investigations run on change or in a Sunday batch, with a shared $0.50 weekly LLM budget.
 
 ## Prerequisites
 
@@ -24,6 +24,7 @@ cd services/debate-verifier && uv sync && uv run pytest     # likewise for servi
 
 docker compose up -d                           # postgres + redis on 127.0.0.1 only
 pnpm sandbox:eval --scenarios 1,3,12 --runs 1 --injection-mode strip  # manual paid eval, local sandbox only
+pnpm sandbox:approvals                        # sandbox TLS and stopped-container repair with Telegram approval
 ```
 
 ## Layout

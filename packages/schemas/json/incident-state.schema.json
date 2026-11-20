@@ -137,6 +137,12 @@
         },
         "dissent": {
           "type": "string"
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -157,6 +163,7 @@
           "type": "string",
           "enum": [
             "certbot_renew",
+            "certbot_nginx_issue",
             "nginx_reload",
             "docker_restart",
             "pm2_restart",

@@ -1,0 +1,9 @@
+id: nginx_reload
+category: http_5xx
+risk: low
+params: {}
+dry_run:
+  - [nginx, -t]
+run:
+  - [nginx, -t]
+  - [systemctl, reload, nginx]

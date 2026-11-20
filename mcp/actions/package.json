@@ -14,6 +14,15 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@types/pg": "8.23.1"
+  },
+  "dependencies": {
+    "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/schemas": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:frameworks",
+    "pg": "8.23.1",
+    "yaml": "2.9.1",
+    "zod": "catalog:"
   }
 }

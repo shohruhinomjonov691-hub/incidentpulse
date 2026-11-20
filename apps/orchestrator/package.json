@@ -16,10 +16,10 @@
   },
   "devDependencies": {
     "@incidentpulse/intake": "workspace:*",
-    "@modelcontextprotocol/sdk": "catalog:frameworks",
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@types/pg": "8.23.1"
   },
   "dependencies": {
     "@incidentpulse/config": "workspace:*",
@@ -34,6 +34,9 @@
     "@openai/agents": "catalog:frameworks",
     "bullmq": "catalog:frameworks",
     "ioredis": "catalog:frameworks",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@incidentpulse/mcp-actions": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:frameworks",
+    "pg": "8.23.1"
   }
 }

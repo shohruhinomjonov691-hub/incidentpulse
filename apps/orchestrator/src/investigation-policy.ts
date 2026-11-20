@@ -9,7 +9,7 @@ import {
 } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import type { Redis } from "ioredis";
-import type { IncidentGraph } from "./graph.ts";
+import type { GraphState, IncidentGraph } from "./graph.ts";
 import { scrubText } from "./guardrails.ts";
 import { hashFacts, type PrimaryEvidence } from "./primary-evidence.ts";
 import { runIncident } from "./run.ts";
@@ -41,6 +41,7 @@ export function createInvestigationPolicy(options: {
   probe(job: IncidentJob): Promise<PrimaryEvidence>;
   now?: () => Date;
   prefix?: string;
+  closeApproval?(project: ProjectId, check: string): Promise<void>;
 }) {
   const { redis, graph, notifier, redact, mode, probe } = options;
   const now = options.now ?? (() => new Date());
@@ -79,23 +80,39 @@ export function createInvestigationPolicy(options: {
     }
 
     const { state } = await runIncident(graph, job, primary);
-    // On checkpoint resume, keep the evidence actually analyzed even if the live result changed.
-    const analyzed = state.primary ?? primary;
+    await remember(state, manual);
+    return (
+      state.escalation?.reason ??
+      (state.approval?.status === "pending" ? "awaiting_approval" : "investigated")
+    );
+  }
+
+  async function remember(state: GraphState, manual = false) {
+    const analyzed = state.primary;
+    if (!analyzed) return;
+    const { project, signal } = state;
     const from = fingerprint(project, analyzed.category, analyzed.hash);
     const tx = redis.multi();
-    const best = state.hypotheses[0];
-    if (state.reportSent && !state.escalation && state.category && best) {
+    const best =
+      state.hypotheses.find((h) => h.id === state.verdict?.hypothesisId) ?? state.hypotheses[0];
+    const concluded = state.reportSent || state.approval || state.workflowStatus;
+    if (concluded && !state.escalation && state.category && best) {
       const found = fingerprint(project, state.category, analyzed.hash);
-      tx.set(cacheKey(found), redact(best.cause).slice(0, 240), "EX", CACHE_SECONDS);
-      tx.set(aliasKey(from), found, "EX", CACHE_SECONDS);
+      const cause = redact(best.cause).slice(0, 240);
+      if (manual) {
+        tx.set(cacheKey(found), cause, "EX", CACHE_SECONDS);
+        tx.set(aliasKey(from), found, "EX", CACHE_SECONDS);
+      } else {
+        tx.set(cacheKey(found), cause, "EX", CACHE_SECONDS, "NX");
+        tx.set(aliasKey(from), found, "EX", CACHE_SECONDS, "NX");
+      }
     }
     if (!manual) tx.hset(applied(project), signal.check, from);
-    const result = await tx.exec();
-    for (const [error] of result ?? []) if (error) throw error;
-    return state.escalation?.reason ?? "investigated";
+    for (const [error] of (await tx.exec()) ?? []) if (error) throw error;
   }
 
   return {
+    remember,
     async monitor(job: IncidentJob) {
       const { project, signal } = job;
       if (signal.level !== "ok" && signal.level !== "down") return "ignored";
@@ -113,7 +130,10 @@ export function createInvestigationPolicy(options: {
         tx.hdel(applied(project), signal.check);
       }
       for (const [error] of (await tx.exec()) ?? []) if (error) throw error;
-      if (signal.level === "ok") return "recovered";
+      if (signal.level === "ok") {
+        await options.closeApproval?.(project, signal.check);
+        return "recovered";
+      }
       if (mode === "weekly") return "buffered";
       return investigate(job);
     },

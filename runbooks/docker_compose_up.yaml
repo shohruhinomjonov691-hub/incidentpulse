@@ -1,0 +1,8 @@
+id: docker_compose_up
+category: container_down
+risk: medium
+params: { project: compose }
+dry_run:
+  - [docker, compose, -f, "{composeFile}", -p, "{project}", config, --quiet]
+run:
+  - [docker, compose, -f, "{composeFile}", -p, "{project}", up, -d]

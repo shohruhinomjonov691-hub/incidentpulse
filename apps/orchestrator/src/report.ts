@@ -8,13 +8,19 @@ import {
 /** Telegram messages (Uzbek, short, read-only, no buttons). Layout follows SPEC §6. */
 
 export type OverBudget = "incident" | "weekly" | null;
-export type EscalationReason = "incident_budget" | "weekly_budget" | "guardrail";
+export type EscalationReason =
+  | "incident_budget"
+  | "weekly_budget"
+  | "guardrail"
+  | "remediation"
+  | "recovery";
 
 export interface ReportView {
   incidentId: string;
   project: ProjectId;
   evidence: Evidence[];
   hypotheses: Hypothesis[];
+  verdict?: { hypothesisId: string; confidence: number } | undefined;
   costUsd: number;
   overBudget: OverBudget;
   budgetUsd: number;
@@ -56,9 +62,13 @@ export function formatReport(view: ReportView): string {
   const name = PROJECT_DISPLAY_NAMES[view.project];
   const lines = [`🔴 ${name} — incident #${view.incidentId}`];
 
-  const top = [...view.hypotheses].sort((a, b) => b.confidence - a.confidence)[0];
+  const top =
+    view.hypotheses.find((item) => item.id === view.verdict?.hypothesisId) ??
+    [...view.hypotheses].sort((a, b) => b.confidence - a.confidence)[0];
   if (top) {
-    lines.push(`Sabab (ishonch ${top.confidence.toFixed(2)}): ${clip(top.cause, 240)}`);
+    lines.push(
+      `Sabab (ishonch ${(view.verdict?.confidence ?? top.confidence).toFixed(2)}): ${clip(top.cause, 240)}`,
+    );
     const cited = view.evidence.filter((e) => top.supportingEvidenceIds.includes(e.id));
     const shown = cited.length > 0 ? cited : view.evidence;
     if (shown.length > 0) lines.push(evidenceLine(shown));
@@ -101,6 +111,12 @@ export function formatEscalation(view: EscalationView): string {
   if (view.reason === "guardrail") {
     lines.push(
       "Sabab: tahlil natijasi guardrail tekshiruvidan o'tmadi (dalilga tayanmaydi) — avtomatik xulosa rad etildi.",
+    );
+  } else if (view.reason === "remediation" || view.reason === "recovery") {
+    lines.push(
+      view.reason === "remediation"
+        ? "Sabab: xavfsiz tuzatish taklifi yoki tasdiqlangan ijro mavjud emas."
+        : "Sabab: tuzatishdan keyingi tekshiruv tiklanishni tasdiqlamadi.",
     );
   } else if (view.reason === "weekly_budget") {
     lines.push(

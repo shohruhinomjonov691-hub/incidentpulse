@@ -36,6 +36,7 @@ export interface Specialist {
     triageCategory: Category;
     triageReason: string;
     quickEvidence?: Evidence[];
+    missing?: string[];
   }): Promise<SpecialistResult>;
 }
 

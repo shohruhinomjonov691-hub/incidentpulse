@@ -16,6 +16,7 @@ export interface PrimaryEvidence {
   quickEvidence: Evidence[];
   unsafeAttempts: number;
   injectionFlags: number;
+  health?: { endpoints: Array<{ url: string; ok: boolean }>; containers: Record<string, boolean> };
 }
 
 export function hashFacts(value: unknown): string {
@@ -34,6 +35,7 @@ export function createPrimaryProbe(options: ProbeOptions) {
     const { domains, containers } = options.resources;
     const quickEvidence: Evidence[] = [];
     const facts: unknown[] = [];
+    const health: NonNullable<PrimaryEvidence["health"]> = { endpoints: [], containers: {} };
     const categories = new Set<Category>();
     let injectionFlags = 0;
 
@@ -78,6 +80,10 @@ export function createPrimaryProbe(options: ProbeOptions) {
             blockedRedirect: http.blockedRedirect,
             redirects: http.redirects,
           });
+          health.endpoints.push({
+            url: http.url,
+            ok: http.completed && (http.status ?? 0) >= 200 && (http.status ?? 999) < 400,
+          });
           if (http.certErrorCode) {
             categories.add("tls");
             const {
@@ -101,6 +107,12 @@ export function createPrimaryProbe(options: ProbeOptions) {
         if (containers[project].length && !categories.has("tls")) {
           const ps = DockerPsResultSchema.parse(await call("docker_ps", {}));
           const ordered = ps.containers.sort((a, b) => a.name.localeCompare(b.name));
+          health.containers = Object.fromEntries(
+            ordered.map((c) => [
+              c.name,
+              c.state === "running" && !/unhealthy|health: starting/.test(c.status),
+            ]),
+          );
           facts.push({
             error: ps.error,
             containers: ordered.map(({ name, image, state, status }) => ({
@@ -144,6 +156,7 @@ export function createPrimaryProbe(options: ProbeOptions) {
       quickEvidence,
       unsafeAttempts: 0,
       injectionFlags,
+      health,
     };
   };
 }

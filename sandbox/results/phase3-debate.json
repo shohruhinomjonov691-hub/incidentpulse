@@ -1,0 +1,42 @@
+{
+  "model": "gpt-5.4-nano",
+  "evidence": "seeded, mock specialists and synthesis",
+  "costUsd": 0.00186665,
+  "iteration": 1,
+  "missingDelivered": true,
+  "trace": [
+    {
+      "at": "2026-11-20T23:13:29.091Z",
+      "node": "verify",
+      "event": "debate_verdict",
+      "detail": {
+        "confidence": 0.35,
+        "missing": 4,
+        "round": 1
+      }
+    },
+    {
+      "at": "2026-11-20T23:13:29.093Z",
+      "node": "reinvestigate",
+      "event": "collect_missing",
+      "detail": {
+        "missing": [
+          "HTTP status code or recorded error type (DNS/TLS/connection refused/timeout).",
+          "Timing metrics (timeout duration vs immediate failure).",
+          "Whether the request was attempted over HTTP vs HTTPS and any handshake details.",
+          "Any related logs from the sandbox/tool run (proxy/gateway errors)."
+        ]
+      }
+    },
+    {
+      "at": "2026-11-20T23:13:38.080Z",
+      "node": "verify",
+      "event": "debate_verdict",
+      "detail": {
+        "confidence": 0.78,
+        "missing": 4,
+        "round": 2
+      }
+    }
+  ]
+}

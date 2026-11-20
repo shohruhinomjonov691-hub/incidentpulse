@@ -172,6 +172,7 @@ function buildPrompt(args: {
   triageCategory: string;
   triageReason: string;
   quickEvidence?: Evidence[];
+  missing?: string[];
 }): string {
   // The monitor summary is outside text too: scrub it with the same guardrail as tool output.
   const summary = scrubText(args.signal.summary).text;
@@ -194,6 +195,12 @@ function buildPrompt(args: {
           ),
         ]
       : []),
+    ...(args.missing?.length
+      ? [
+          "Collect relevant missing facts using your existing allowlisted tools.",
+          wrapUntrusted(args.missing.join("\n"), "missing_facts"),
+        ]
+      : []),
     "Investigate with your tools.",
   ].join("\n");
 }
@@ -208,7 +215,7 @@ export function createSpecialist(
   return {
     name,
     isAvailable: (project) => def.isAvailable(project, options.resources),
-    async investigate({ project, signal, triageCategory, triageReason, quickEvidence }) {
+    async investigate({ project, signal, triageCategory, triageReason, quickEvidence, missing }) {
       const server = def.server(project, options);
       await server.connect();
       try {
@@ -231,6 +238,7 @@ export function createSpecialist(
             signal,
             triageCategory,
             triageReason,
+            ...(missing ? { missing } : {}),
             ...(name === "infra" && quickEvidence ? { quickEvidence } : {}),
           }),
           { maxTurns: options.maxTurns ?? 8 },

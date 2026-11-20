@@ -1,0 +1,8 @@
+id: docker_restart
+category: container_down
+risk: low
+params: { service: containers }
+dry_run:
+  - [docker, inspect, --format, "{{.Name}} {{.State.Status}}", "{service}"]
+run:
+  - [docker, restart, "{service}"]

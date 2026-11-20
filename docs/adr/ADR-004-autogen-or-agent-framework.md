@@ -12,7 +12,8 @@
 
 Use **Microsoft Agent Framework** (Python) for the debate verifier (Investigator vs Skeptic, Judge). AutoGen is not used: its repository is archived. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
 
-- `agent-framework-core` 1.26.0 (declared as the optional `agents` extra of `services/debate-verifier`; the exact package split is confirmed when Phase 3 starts)
+- `agent-framework-core` 1.26.0 (agents and orchestration)
+- `agent-framework-openai` 1.18.2 (the OpenAI Responses connector)
 
 ## Why this and not another
 
@@ -20,11 +21,11 @@ Multi-agent conversation/debate is its core pattern; it reduces confident-but-wr
 
 ## Alternatives considered
 
-TODO (fill in when the phase starts). Starting points: See the status finding below.
+See the options and status finding below.
 
 ## Consequences
 
-TODO.
+The verifier uses bounded, evidence-only prompts. It validates the Judge verdict against a shared JSON Schema and returns usage to the TypeScript orchestrator.
 
 ## Status finding (verified 2026-11-21)
 

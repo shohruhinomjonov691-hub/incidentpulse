@@ -1,17 +1,13 @@
-# debate-verifier
+# Debate verifier
 
-Debate verifier: Investigator vs Skeptic with a Judge scoring the top hypothesis.
+Python 3.12 and FastAPI. `POST /verify` uses Microsoft Agent Framework's Investigator, Skeptic and Judge with `gpt-5.4-nano`. The Skeptic must identify an actual supplied evidence ID when evidence exists. The Judge's verdict and the request are validated with generated JSON Schemas from `packages/schemas/json`.
 
-**Status:** Phase 0 skeleton. Only `GET /health` exists; the real service starts in Phase 3
-(see [docs/SPEC.md](../../docs/SPEC.md) §13, [ADR-004](../../docs/adr/)).
-
-- Python 3.12, managed with [uv](https://docs.astral.sh/uv/); FastAPI.
-- The shared contract is `packages/schemas/json/incident-state.schema.json`
-  (`tests/test_contract.py` validates a fixture against it).
+The service accepts one or two rounds per request. The orchestrator asks for one round at a time, with at most two per incident. The response body is `{hypothesisId, confidence, dissent, missing}` and the `X-Debate-Cost-Usd` header contains the token-usage estimate. Each agent uses at most 420 output tokens.
 
 ```bash
-uv sync
+uv sync --locked
 uv run pytest
-uv run ruff check . && uv run ruff format --check .
-uv run uvicorn --app-dir src debate_verifier.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn debate_verifier.main:app --app-dir src --host 127.0.0.1 --port 8790
 ```
+
+Set `OPENAI_API_KEY` in the service environment. Set the same `DEBATE_SHARED_SECRET` on both services. The orchestrator sends the secret as a bearer token and reserves weekly budget before making the request. Use a private endpoint and TLS across hosts.

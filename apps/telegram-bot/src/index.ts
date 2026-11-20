@@ -3,8 +3,10 @@ import { Api } from "grammy";
 
 export { createInvestigationBot } from "./investigate.ts";
 
+export type TelegramButtons = Array<Array<{ text: string; callback_data: string }>>;
+
 export interface Notifier {
-  send(text: string): Promise<{ messageId: number }>;
+  send(text: string, buttons?: TelegramButtons): Promise<{ messageId: number }>;
 }
 
 /** The slice of grammY's Api we use; lets tests inject a mock. */
@@ -12,7 +14,10 @@ export interface TelegramSender {
   sendMessage(
     chatId: number,
     text: string,
-    other?: { link_preview_options?: { is_disabled: boolean } },
+    other?: {
+      link_preview_options?: { is_disabled: boolean };
+      reply_markup?: { inline_keyboard: TelegramButtons };
+    },
   ): Promise<{ message_id: number }>;
 }
 
@@ -32,13 +37,14 @@ export function createTelegramNotifier(options: {
   const api: TelegramSender = options.api ?? new Api(options.token);
 
   return {
-    async send(text) {
+    async send(text, buttons) {
       const safe = redact(text);
       const body = safe.length > TELEGRAM_LIMIT ? `${safe.slice(0, TELEGRAM_LIMIT - 1)}…` : safe;
       try {
         // Plain text on purpose (no parse_mode): nothing in the message can be interpreted as markup.
         const sent = await api.sendMessage(chatId, body, {
           link_preview_options: { is_disabled: true },
+          ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
         });
         return { messageId: sent.message_id };
       } catch (error) {

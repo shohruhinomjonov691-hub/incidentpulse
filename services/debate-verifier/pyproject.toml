@@ -7,18 +7,15 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi==0.165.0",
     "uvicorn==0.54.0",
+    "agent-framework-core==1.26.0",
+    "agent-framework-openai==1.18.2",
+    "jsonschema==4.26.0",
 ]
-
-# Framework for a later phase (see ADR-004); not installed by default.
-# Install with: uv sync --extra agents
-[project.optional-dependencies]
-agents = ["agent-framework-core==1.26.0"]
 
 [dependency-groups]
 dev = [
     "pytest==9.2.0",
     "httpx2==2.16.2",
-    "jsonschema==4.26.0",
     "ruff==0.17.6",
 ]
 
