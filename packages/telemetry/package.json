@@ -1,0 +1,19 @@
+{
+  "name": "@incidentpulse/telemetry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenTelemetry + Langfuse helpers shared across apps.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

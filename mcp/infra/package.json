@@ -1,0 +1,19 @@
+{
+  "name": "@incidentpulse/mcp-infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only MCP server: tls_inspect, dns_lookup, http_probe, docker_*, ...",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

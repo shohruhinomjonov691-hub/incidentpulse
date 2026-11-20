@@ -1,0 +1,40 @@
+{
+  "incidentId": "inc-42",
+  "project": "kervan",
+  "signal": {
+    "check": "https",
+    "level": "down",
+    "summary": "TLS handshake failed: certificate has expired",
+    "at": "2026-11-21T04:00:00.000Z"
+  },
+  "category": "tls",
+  "evidence": [
+    {
+      "source": "mcp-infra",
+      "tool": "tls_inspect",
+      "excerpt": "notAfter=2026-11-18T00:00:00Z chainValid=false",
+      "at": "2026-11-21T04:00:05.000Z",
+      "hash": "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h1",
+      "cause": "TLS certificate expired on 2026-11-18",
+      "supportingEvidenceIds": [
+        "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      ],
+      "confidence": 0.91
+    }
+  ],
+  "verdict": { "hypothesisId": "h1", "confidence": 0.91 },
+  "iteration": 1,
+  "remediation": {
+    "runbookId": "certbot_renew",
+    "params": { "domain": "kervan.uz" },
+    "risk": "low",
+    "dryRunOutput": "Congratulations, all simulated renewals succeeded"
+  },
+  "approval": { "status": "pending" },
+  "costUsd": 0.12
+}

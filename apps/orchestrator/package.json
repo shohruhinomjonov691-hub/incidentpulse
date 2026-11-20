@@ -1,0 +1,19 @@
+{
+  "name": "@incidentpulse/orchestrator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LangGraph.js incident graph, Agents SDK agents, BullMQ worker.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

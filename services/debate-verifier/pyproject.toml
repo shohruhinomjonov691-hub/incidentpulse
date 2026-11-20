@@ -1,0 +1,37 @@
+[project]
+name = "debate-verifier"
+version = "0.0.0"
+description = "Debate verifier: Investigator vs Skeptic with a Judge scoring the top hypothesis."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.165.0",
+    "uvicorn==0.54.0",
+]
+
+# Framework for a later phase (see ADR-004); not installed by default.
+# Install with: uv sync --extra agents
+[project.optional-dependencies]
+agents = ["agent-framework-core==1.26.0"]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "httpx2==2.16.2",
+    "jsonschema==4.26.0",
+    "ruff==0.17.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

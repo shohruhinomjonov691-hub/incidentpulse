@@ -1,0 +1,18 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.venv",
+      "!**/.turbo",
+      "!**/.next",
+      "!**/dist",
+      "!**/*.md",
+      "!packages/schemas/json",
+      "!**/pnpm-lock.yaml"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "linter": { "enabled": true }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "incidentpulse",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Autonomous multi-agent incident investigator (see docs/SPEC.md)",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "generate": "turbo run generate",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "turbo": "catalog:"
+  }
+}

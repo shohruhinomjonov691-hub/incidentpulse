@@ -1,0 +1,33 @@
+packages:
+  - "apps/*"
+  - "mcp/*"
+  - "packages/*"
+
+# Exact pins (no ^ or ~). Sources and verification date: docs/VERSIONS.md
+catalog:
+  # tooling (used now)
+  turbo: 2.11.13
+  typescript: 7.0.2
+  vitest: 5.1.1
+  zod: 4.6.7
+  "@types/node": 24.19.2
+  "@biomejs/biome": 2.6.8
+
+# Framework pins for later phases. Declared here so versions are decided once;
+# a package adopts one with "catalog:frameworks" when its phase starts.
+catalogs:
+  frameworks:
+    "@langchain/langgraph": 1.7.5
+    "@langchain/langgraph-checkpoint-postgres": 1.1.4
+    "@openai/agents": 0.22.0
+    "@modelcontextprotocol/sdk": 1.32.2
+    ai: 7.0.178
+    next: 16.4.6
+    "@langfuse/client": 6.1.1
+    "@langfuse/tracing": 6.1.1
+    "@langfuse/otel": 6.1.1
+    drizzle-orm: 0.45.4
+    bullmq: 6.7.8
+    grammy: 1.46.0
+    promptfoo: 0.126.0
+    fastify: 5.12.8

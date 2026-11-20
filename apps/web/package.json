@@ -1,0 +1,19 @@
+{
+  "name": "@incidentpulse/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js + Vercel AI SDK: live incident timeline, chat, approval UI.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

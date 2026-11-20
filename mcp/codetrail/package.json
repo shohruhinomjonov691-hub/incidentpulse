@@ -1,0 +1,19 @@
+{
+  "name": "@incidentpulse/mcp-codetrail",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only MCP server wrapping the CodeTrail HTTP API.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@incidentpulse/schemas",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "zod schemas and generated JSON Schema (shared TS <-> Python contracts).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "generate": "node scripts/generate-json-schema.ts"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}
