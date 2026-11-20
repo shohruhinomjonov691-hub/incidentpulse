@@ -10,11 +10,17 @@ import {
 } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import { Annotation, type BaseCheckpointSaver, END, START, StateGraph } from "@langchain/langgraph";
-import { formatReport } from "./report.ts";
+import type { DailyBudget } from "./daily-budget.ts";
+import { formatEscalation, formatReport, type OverBudget } from "./report.ts";
 import type { InfraSpecialist, Synthesizer } from "./types.ts";
 
 /**
- * Phase 1 graph (SPEC §13): intake → infra_specialist → synthesize → report.
+ * Graph (SPEC §13, Phase 1 + SPEC §8 budgets):
+ *
+ *   intake → infra_specialist → synthesize → report
+ *      │            │
+ *      └────────────┴── a budget is spent ──► escalate (Telegram "needs a human")
+ *
  * Triage, fan-out, debate, approval and execution come in later phases.
  */
 
@@ -28,8 +34,14 @@ const IncidentAnnotation = Annotation.Root({
   iteration: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
   /** Nodes return a delta; the reducer keeps the running total (SPEC §3.1 costUsd). */
   costUsd: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }),
-  budgetExceeded: Annotation<boolean>({ reducer: (_a, b) => b, default: () => false }),
+  /** Which budget (if any) is spent. "daily" wins over "incident". */
+  overBudget: Annotation<OverBudget>({ reducer: (_a, b) => b, default: () => null }),
+  /** Today's total spend (all incidents) as last seen by this incident. */
+  dailySpentUsd: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
   reportSent: Annotation<{ sentAt: string; messageId: number } | undefined>(),
+  escalation: Annotation<
+    { reason: "incident_budget" | "daily_budget"; sentAt: string; messageId: number } | undefined
+  >(),
 });
 
 export type GraphState = typeof IncidentAnnotation.State;
@@ -42,6 +54,9 @@ export interface GraphDeps {
   projectDomains: Record<ProjectId, string[]>;
   /** Hard stop per incident, USD (SPEC §8). */
   budgetUsd: number;
+  /** Hard stop per UTC day across all incidents, USD (SPEC §8). */
+  dailyBudgetUsd: number;
+  dailyBudget: DailyBudget;
   checkpointer?: BaseCheckpointSaver;
   now?: () => Date;
 }
@@ -64,15 +79,27 @@ export function toIncidentState(state: GraphState): IncidentState {
 export function buildIncidentGraph(deps: GraphDeps) {
   const now = deps.now ?? (() => new Date());
 
-  const intake = async (state: GraphState) => ({
-    // Normalize the untrusted signal text: collapse whitespace, bounded length.
-    signal: {
-      ...state.signal,
-      level: state.signal.level.trim().toLowerCase(),
-      summary: state.signal.summary.replace(/\s+/g, " ").trim().slice(0, 1000),
-    },
-    iteration: 0,
-  });
+  const classify = (incidentCostUsd: number, dailyTotalUsd: number): OverBudget => {
+    if (dailyTotalUsd >= deps.dailyBudgetUsd) return "daily";
+    if (incidentCostUsd >= deps.budgetUsd) return "incident";
+    return null;
+  };
+
+  const intake = async (state: GraphState) => {
+    // Daily gate: when today's budget is already spent, no LLM call is made at all.
+    const spent = await deps.dailyBudget.spentUsd(now());
+    return {
+      // Normalize the untrusted signal text: collapse whitespace, bounded length.
+      signal: {
+        ...state.signal,
+        level: state.signal.level.trim().toLowerCase(),
+        summary: state.signal.summary.replace(/\s+/g, " ").trim().slice(0, 1000),
+      },
+      iteration: 0,
+      dailySpentUsd: spent,
+      overBudget: spent >= deps.dailyBudgetUsd ? ("daily" as const) : null,
+    };
+  };
 
   const infraSpecialist = async (state: GraphState) => {
     const domains = deps.projectDomains[state.project];
@@ -87,10 +114,12 @@ export function buildIncidentGraph(deps: GraphDeps) {
       signal: state.signal,
       evidenceOffset: state.evidence.length,
     });
+    const dailyTotal = await deps.dailyBudget.addUsd(result.costUsd, now());
     return {
       evidence: result.evidence,
       costUsd: result.costUsd,
-      budgetExceeded: state.costUsd + result.costUsd >= deps.budgetUsd,
+      dailySpentUsd: dailyTotal,
+      overBudget: classify(state.costUsd + result.costUsd, dailyTotal),
     };
   };
 
@@ -100,11 +129,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
       signal: state.signal,
       evidence: state.evidence,
     });
+    const dailyTotal = await deps.dailyBudget.addUsd(result.costUsd, now());
     return {
       category: result.category,
       hypotheses: result.hypotheses,
       costUsd: result.costUsd,
-      budgetExceeded: state.costUsd + result.costUsd >= deps.budgetUsd,
+      dailySpentUsd: dailyTotal,
+      overBudget: classify(state.costUsd + result.costUsd, dailyTotal),
     };
   };
 
@@ -117,11 +148,29 @@ export function buildIncidentGraph(deps: GraphDeps) {
       evidence: state.evidence,
       hypotheses: state.hypotheses,
       costUsd: state.costUsd,
-      budgetExceeded: state.budgetExceeded,
+      overBudget: state.overBudget,
       budgetUsd: deps.budgetUsd,
+      dailyBudgetUsd: deps.dailyBudgetUsd,
     });
     const sent = await deps.notifier.send(deps.redact(text));
     return { reportSent: { sentAt: now().toISOString(), messageId: sent.messageId } };
+  };
+
+  const escalate = async (state: GraphState) => {
+    toIncidentState(state);
+    const reason = state.overBudget === "daily" ? "daily_budget" : "incident_budget";
+    const text = formatEscalation({
+      incidentId: state.incidentId,
+      project: state.project,
+      reason,
+      evidence: state.evidence,
+      costUsd: state.costUsd,
+      spentTodayUsd: state.dailySpentUsd,
+      budgetUsd: deps.budgetUsd,
+      dailyBudgetUsd: deps.dailyBudgetUsd,
+    });
+    const sent = await deps.notifier.send(deps.redact(text));
+    return { escalation: { reason, sentAt: now().toISOString(), messageId: sent.messageId } };
   };
 
   return (
@@ -130,16 +179,22 @@ export function buildIncidentGraph(deps: GraphDeps) {
       .addNode("infra_specialist", infraSpecialist)
       .addNode("synthesize", synthesize)
       .addNode("report", report)
+      .addNode("escalate", escalate)
       .addEdge(START, "intake")
-      .addEdge("intake", "infra_specialist")
-      // Budget guard: once the incident budget is spent, no further LLM call is made.
+      // Budget guards: once a budget is spent, no further LLM call is made.
+      .addConditionalEdges(
+        "intake",
+        (s: GraphState) => (s.overBudget ? "escalate" : "infra_specialist"),
+        { escalate: "escalate", infra_specialist: "infra_specialist" },
+      )
       .addConditionalEdges(
         "infra_specialist",
-        (s: GraphState) => (s.budgetExceeded ? "report" : "synthesize"),
-        { report: "report", synthesize: "synthesize" },
+        (s: GraphState) => (s.overBudget ? "escalate" : "synthesize"),
+        { escalate: "escalate", synthesize: "synthesize" },
       )
       .addEdge("synthesize", "report")
       .addEdge("report", END)
+      .addEdge("escalate", END)
       .compile(deps.checkpointer ? { checkpointer: deps.checkpointer } : {})
   );
 }

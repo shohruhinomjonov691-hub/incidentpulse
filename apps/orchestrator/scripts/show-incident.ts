@@ -2,7 +2,7 @@
 // Usage: pnpm --filter @incidentpulse/orchestrator show <incidentId>
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import type { GraphState } from "../src/graph.ts";
-import { formatReport } from "../src/report.ts";
+import { formatEscalation, formatReport } from "../src/report.ts";
 
 const incidentId = process.argv[2];
 if (!incidentId) {
@@ -20,7 +20,16 @@ try {
     console.error(`no checkpoint for ${incidentId}`);
     process.exit(1);
   }
-  const s = tuple.checkpoint.channel_values as unknown as GraphState;
+  // Channels that were never written (e.g. evidence on a budget escalation) are absent here.
+  const raw = tuple.checkpoint.channel_values as unknown as Partial<GraphState>;
+  const s = {
+    ...raw,
+    evidence: raw.evidence ?? [],
+    hypotheses: raw.hypotheses ?? [],
+    costUsd: raw.costUsd ?? 0,
+    dailySpentUsd: raw.dailySpentUsd ?? 0,
+    overBudget: raw.overBudget ?? null,
+  } as GraphState;
   console.log(
     `category=${s.category} costUsd=${s.costUsd} reportSent=${JSON.stringify(s.reportSent)}`,
   );
@@ -30,16 +39,30 @@ try {
   for (const h of s.hypotheses)
     console.log(`${h.id} (${h.confidence}) [${h.supportingEvidenceIds}] ${h.cause}`);
   console.log("--- telegram message (as sent)");
+  const budgetUsd = Number(process.env.INCIDENT_BUDGET_USD ?? 0.5);
+  const dailyBudgetUsd = Number(process.env.DAILY_BUDGET_USD ?? 3);
   console.log(
-    formatReport({
-      incidentId: s.incidentId,
-      project: s.project,
-      evidence: s.evidence,
-      hypotheses: s.hypotheses,
-      costUsd: s.costUsd,
-      budgetExceeded: s.budgetExceeded,
-      budgetUsd: Number(process.env.INCIDENT_BUDGET_USD ?? 0.5),
-    }),
+    s.escalation
+      ? formatEscalation({
+          incidentId: s.incidentId,
+          project: s.project,
+          reason: s.escalation.reason,
+          evidence: s.evidence,
+          costUsd: s.costUsd,
+          spentTodayUsd: s.dailySpentUsd,
+          budgetUsd,
+          dailyBudgetUsd,
+        })
+      : formatReport({
+          incidentId: s.incidentId,
+          project: s.project,
+          evidence: s.evidence,
+          hypotheses: s.hypotheses,
+          costUsd: s.costUsd,
+          overBudget: s.overBudget,
+          budgetUsd,
+          dailyBudgetUsd,
+        }),
   );
 } finally {
   await saver.end();

@@ -31,8 +31,9 @@ export function createIncidentWorker(options: WorkerOptions): { close(): Promise
       log.info("incident finished", {
         incidentId: parsed.incidentId,
         mode: outcome.mode,
-        costUsd: Number(outcome.state.costUsd.toFixed(6)),
-        hypotheses: outcome.state.hypotheses.length,
+        costUsd: Number((outcome.state.costUsd ?? 0).toFixed(6)),
+        hypotheses: outcome.state.hypotheses?.length ?? 0,
+        escalated: outcome.state.escalation?.reason ?? null,
       });
     },
     { connection, concurrency: 1 },

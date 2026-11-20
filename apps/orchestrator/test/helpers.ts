@@ -3,8 +3,11 @@ import { createRedactor } from "@incidentpulse/redact";
 import type { Evidence, IncidentJob } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import { MemorySaver } from "@langchain/langgraph";
+import { createMemoryDailyBudget } from "../src/daily-budget.ts";
 import { buildIncidentGraph, type GraphDeps } from "../src/graph.ts";
 import type { InfraSpecialist, Synthesizer } from "../src/types.ts";
+
+export const NOW = new Date("2026-11-21T04:00:10.000Z");
 
 export const job = (overrides: Partial<IncidentJob> = {}): IncidentJob => ({
   incidentId: "inc-test-1",
@@ -42,6 +45,8 @@ export function makeMocks(
     infraCost?: number;
     synthCost?: number;
     budgetUsd?: number;
+    dailyBudgetUsd?: number;
+    dailySpentUsd?: number;
     synthFailures?: number;
     notifierFails?: boolean;
   } = {},
@@ -97,8 +102,10 @@ export function makeMocks(
     redact: createRedactor(),
     projectDomains: DEFAULT_PROJECT_DOMAINS,
     budgetUsd: overrides.budgetUsd ?? 0.5,
+    dailyBudgetUsd: overrides.dailyBudgetUsd ?? 3,
+    dailyBudget: createMemoryDailyBudget(overrides.dailySpentUsd ?? 0, NOW),
     checkpointer: new MemorySaver(),
-    now: () => new Date("2026-11-21T04:00:10.000Z"),
+    now: () => NOW,
   };
   return { infra, synth, notifier, deps };
 }

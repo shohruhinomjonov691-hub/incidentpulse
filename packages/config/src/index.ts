@@ -36,6 +36,8 @@ const EnvSchema = z.object({
   INTAKE_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   /** Hard stop per incident (SPEC §8). */
   INCIDENT_BUDGET_USD: z.coerce.number().positive().default(0.5),
+  /** Hard stop per UTC day across all incidents (SPEC §8). */
+  DAILY_BUDGET_USD: z.coerce.number().positive().default(3),
   /** Same project+check inside this window is one incident. */
   DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(600),
   /** Optional JSON overriding PROJECT_DOMAINS, e.g. {"gotrip":["gotrip.uz"]}. */
@@ -157,6 +159,7 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "DATABASE_URL",
     "REDIS_URL",
     "INCIDENT_BUDGET_USD",
+    "DAILY_BUDGET_USD",
     "PROJECT_DOMAINS_JSON",
   ] as const);
   const overrides: { input?: number; cachedInput?: number; output?: number } = {};
@@ -174,6 +177,7 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     databaseUrl: c.DATABASE_URL,
     redisUrl: c.REDIS_URL,
     budgetUsd: c.INCIDENT_BUDGET_USD,
+    dailyBudgetUsd: c.DAILY_BUDGET_USD,
     projectDomains: resolveProjectDomains(c.PROJECT_DOMAINS_JSON),
   };
 }

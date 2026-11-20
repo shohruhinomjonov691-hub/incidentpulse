@@ -5,7 +5,7 @@ import { type LlmSynthesis, normalizeSynthesis } from "../src/agents/synthesizer
 import { costOf, sumUsage } from "../src/cost.ts";
 import { buildEvidence, extractToolOutputText } from "../src/evidence.ts";
 import { createLogger } from "../src/log.ts";
-import { formatFailureNotice, formatReport } from "../src/report.ts";
+import { formatEscalation, formatFailureNotice, formatReport } from "../src/report.ts";
 import { tlsMismatchEvidence } from "./helpers.ts";
 
 const mini = KNOWN_PRICING["gpt-5.4-mini"] as (typeof KNOWN_PRICING)[string];
@@ -257,8 +257,9 @@ describe("report formatting", () => {
       evidence: [tlsMismatchEvidence()],
       hypotheses: [],
       costUsd: 0,
-      budgetExceeded: false,
+      overBudget: null,
       budgetUsd: 0.5,
+      dailyBudgetUsd: 3,
     });
     expect(text).toContain("Sabab: aniqlanmadi");
     expect(text).toContain("Dalil: tls_inspect(kervan.uz)");
@@ -276,5 +277,59 @@ describe("logger", () => {
     expect(lines[0]).not.toContain("super-secret-value-123");
     expect(lines[0]).not.toContain("abcdefghij1234567890");
     expect(JSON.parse(lines[0] as string)).toMatchObject({ level: "error", msg: "failed", ok: 1 });
+  });
+});
+
+describe("evidence line is never cut in the middle of a token", () => {
+  const long = (n: number) => ({
+    ...tlsMismatchEvidence("e1"),
+    excerpt: `tls_inspect(example.com): ${"issuer=Let's-Encrypt ".repeat(n)}`.trim(),
+  });
+  const view = (excerpt: ReturnType<typeof long>) => ({
+    incidentId: "inc-1",
+    project: "kervan" as const,
+    evidence: [excerpt],
+    hypotheses: [{ id: "h1", cause: "x", supportingEvidenceIds: ["e1"], confidence: 0.9 }],
+    costUsd: 0,
+    overBudget: null,
+    budgetUsd: 0.5,
+    dailyBudgetUsd: 3,
+  });
+
+  test("the real Kervan evidence (the line that used to be cut at 'is…') now fits whole", () => {
+    const real = {
+      ...tlsMismatchEvidence("e1"),
+      excerpt:
+        "tls_inspect(kervan.uz): chainValid=false hostnameMatch=false expired=false notAfter=2027-01-13 (53d) error=ERR_TLS_CERT_ALTNAME_INVALID subject=codetrail.gotrips.cloud issuer=Let's Encrypt / YE1",
+    };
+    const text = formatReport(view(real));
+    expect(text).toContain(`Dalil: ${real.excerpt}\n`);
+    expect(text).not.toContain("…");
+  });
+
+  test("an over-long excerpt is cut at a word boundary, with an ellipsis", () => {
+    const line = formatReport(view(long(30)))
+      .split("\n")
+      .find((l) => l.startsWith("Dalil:")) as string;
+    expect(line.endsWith("…")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual("Dalil: ".length + 240);
+    expect(line.slice(0, -1)).toMatch(/issuer=Let's-Encrypt$/); // whole tokens only
+  });
+});
+
+describe("escalation message", () => {
+  test("is short, Uzbek, and mentions neither buttons nor actions", () => {
+    const text = formatEscalation({
+      incidentId: "inc-5",
+      project: "kervan",
+      reason: "daily_budget",
+      evidence: [],
+      costUsd: 0,
+      spentTodayUsd: 3.1,
+      budgetUsd: 0.5,
+      dailyBudgetUsd: 3,
+    });
+    expect(text.split("\n")).toHaveLength(2);
+    expect(text.length).toBeLessThan(200);
   });
 });

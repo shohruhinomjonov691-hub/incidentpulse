@@ -19,8 +19,16 @@ describe("loadOrchestratorConfig", () => {
     const c = loadOrchestratorConfig(base);
     expect(c.model).toBe("gpt-5.4-mini");
     expect(c.budgetUsd).toBe(0.5);
+    expect(c.dailyBudgetUsd).toBe(3);
     expect(c.pricing).toEqual({ inputPerM: 0.75, cachedInputPerM: 0.075, outputPerM: 4.5 });
     expect(c.projectDomains.kervan).toEqual(["kervan.uz"]);
+  });
+
+  test("daily budget is configurable and must be positive", () => {
+    expect(loadOrchestratorConfig({ ...base, DAILY_BUDGET_USD: "1.5" }).dailyBudgetUsd).toBe(1.5);
+    expect(() => loadOrchestratorConfig({ ...base, DAILY_BUDGET_USD: "0" })).toThrow(
+      /DAILY_BUDGET_USD/,
+    );
   });
 
   test("model comes from env", () => {
