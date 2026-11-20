@@ -1,6 +1,12 @@
-export { createInfraSpecialist, createStdioInfraServer } from "./agents/infra-specialist.ts";
 export { configureAgentsSdk } from "./agents/sdk.ts";
+export {
+  createSpecialist,
+  createSpecialists,
+  type ProjectResources,
+  type SpecialistFactoryOptions,
+} from "./agents/specialists.ts";
 export { createSynthesizer, normalizeSynthesis } from "./agents/synthesizer.ts";
+export { createTriage, HandoffInputSchema } from "./agents/triage.ts";
 export { costOf, sumUsage } from "./cost.ts";
 export {
   createMemoryDailyBudget,
@@ -11,10 +17,20 @@ export { buildEvidence, extractToolOutputText } from "./evidence.ts";
 export {
   buildIncidentGraph,
   type GraphDeps,
+  type GraphState,
   type IncidentGraph,
   toIncidentState,
 } from "./graph.ts";
-export { formatEscalation, formatFailureNotice, formatReport } from "./report.ts";
+export { GuardedMcpServer } from "./guarded-mcp.ts";
+export {
+  checkSynthesis,
+  detectInjection,
+  guardToolOutput,
+  type InjectionMode,
+  scrubText,
+  wrapUntrusted,
+} from "./guardrails.ts";
+export { formatEscalation, formatFailureNotice, formatReport, usd } from "./report.ts";
 export { runIncident } from "./run.ts";
-export type { InfraSpecialist, Synthesizer } from "./types.ts";
+export * from "./types.ts";
 export { createIncidentWorker } from "./worker.ts";

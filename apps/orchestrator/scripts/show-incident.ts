@@ -29,10 +29,22 @@ try {
     costUsd: raw.costUsd ?? 0,
     dailySpentUsd: raw.dailySpentUsd ?? 0,
     overBudget: raw.overBudget ?? null,
+    trace: raw.trace ?? [],
+    unsafeAttempts: raw.unsafeAttempts ?? 0,
+    injectionFlags: raw.injectionFlags ?? 0,
   } as GraphState;
   console.log(
     `category=${s.category} costUsd=${s.costUsd} reportSent=${JSON.stringify(s.reportSent)}`,
   );
+  console.log(
+    `unsafeAttempts=${s.unsafeAttempts} injectionFlags=${s.injectionFlags} triage=${JSON.stringify(s.triageResult ?? null)}`,
+  );
+  console.log("--- trace");
+  for (const e of s.trace) {
+    console.log(
+      `${e.at.slice(11, 23)} ${e.node}.${e.event} ${e.detail ? JSON.stringify(e.detail) : ""}`,
+    );
+  }
   console.log("--- evidence");
   for (const e of s.evidence) console.log(`[${e.id}] ${e.excerpt}`);
   console.log("--- hypotheses");

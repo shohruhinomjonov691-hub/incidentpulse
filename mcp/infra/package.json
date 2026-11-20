@@ -19,6 +19,7 @@
     "vitest": "catalog:"
   },
   "dependencies": {
+    "@incidentpulse/redact": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:frameworks",
     "zod": "catalog:"
   }

@@ -8,6 +8,7 @@ import {
 /** Telegram messages (Uzbek, short, read-only, no buttons). Layout follows SPEC §6. */
 
 export type OverBudget = "incident" | "daily" | null;
+export type EscalationReason = "incident_budget" | "daily_budget" | "guardrail";
 
 export interface ReportView {
   incidentId: string;
@@ -31,10 +32,24 @@ function clip(text: string, max: number): string {
   return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
-const usd = (n: number) => `$${n.toFixed(2)}`;
+/** Small amounts (< $0.10) keep 4 decimals so they do not collapse to "$0.00"; larger ones use 2. */
+export function usd(n: number): string {
+  return `$${n.toFixed(n < 0.1 ? 4 : 2)}`;
+}
+
+/** The same fact is often found twice (triage's quick look, then a specialist): show it once. */
+function distinctByExcerpt(items: Evidence[]): Evidence[] {
+  const seen = new Set<string>();
+  return items.filter((e) => {
+    if (seen.has(e.excerpt)) return false;
+    seen.add(e.excerpt);
+    return true;
+  });
+}
 
 function evidenceLine(items: Evidence[]): string {
-  return `Dalil: ${items.map((e) => clip(e.excerpt, MAX_LINE)).join(" · ")}`;
+  const shown = distinctByExcerpt(items).slice(0, MAX_EVIDENCE_LINES);
+  return `Dalil: ${shown.map((e) => clip(e.excerpt, MAX_LINE)).join(" · ")}`;
 }
 
 export function formatReport(view: ReportView): string {
@@ -45,11 +60,11 @@ export function formatReport(view: ReportView): string {
   if (top) {
     lines.push(`Sabab (ishonch ${top.confidence.toFixed(2)}): ${clip(top.cause, 240)}`);
     const cited = view.evidence.filter((e) => top.supportingEvidenceIds.includes(e.id));
-    const shown = (cited.length > 0 ? cited : view.evidence).slice(0, MAX_EVIDENCE_LINES);
+    const shown = cited.length > 0 ? cited : view.evidence;
     if (shown.length > 0) lines.push(evidenceLine(shown));
   } else {
     lines.push("Sabab: aniqlanmadi (tahlil to'liq emas)");
-    const shown = view.evidence.slice(0, MAX_EVIDENCE_LINES);
+    const shown = view.evidence;
     if (shown.length > 0) lines.push(evidenceLine(shown));
   }
 
@@ -70,7 +85,7 @@ export function formatReport(view: ReportView): string {
 export interface EscalationView {
   incidentId: string;
   project: ProjectId;
-  reason: "incident_budget" | "daily_budget";
+  reason: EscalationReason;
   evidence: Evidence[];
   costUsd: number;
   spentTodayUsd: number;
@@ -83,7 +98,11 @@ export function formatEscalation(view: EscalationView): string {
   const lines = [
     `🚨 ${PROJECT_DISPLAY_NAMES[view.project]} — incident #${view.incidentId}: inson ko'rigi kerak`,
   ];
-  if (view.reason === "daily_budget") {
+  if (view.reason === "guardrail") {
+    lines.push(
+      "Sabab: tahlil natijasi guardrail tekshiruvidan o'tmadi (dalilga tayanmaydi) — avtomatik xulosa rad etildi.",
+    );
+  } else if (view.reason === "daily_budget") {
     lines.push(
       `Sabab: kunlik byudjet (${usd(view.dailyBudgetUsd)}) tugadi (bugun ${usd(view.spentTodayUsd)}) — avtomatik tergov to'xtatildi.`,
     );
@@ -92,8 +111,7 @@ export function formatEscalation(view: EscalationView): string {
       `Sabab: incident byudjeti (${usd(view.budgetUsd)}) tugadi (sarflandi ${usd(view.costUsd)}) — tergov to'xtatildi.`,
     );
   }
-  const shown = view.evidence.slice(0, MAX_EVIDENCE_LINES);
-  if (shown.length > 0) lines.push(evidenceLine(shown));
+  if (view.evidence.length > 0) lines.push(evidenceLine(view.evidence));
   return lines.join("\n");
 }
 

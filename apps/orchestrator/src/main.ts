@@ -3,9 +3,10 @@ import { collectSecrets, createRedactor } from "@incidentpulse/redact";
 import { createTelegramNotifier } from "@incidentpulse/telegram-bot";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { Redis } from "ioredis";
-import { createInfraSpecialist } from "./agents/infra-specialist.ts";
 import { configureAgentsSdk } from "./agents/sdk.ts";
+import { createSpecialists } from "./agents/specialists.ts";
 import { createSynthesizer } from "./agents/synthesizer.ts";
+import { createTriage } from "./agents/triage.ts";
 import { createRedisDailyBudget } from "./daily-budget.ts";
 import { buildIncidentGraph } from "./graph.ts";
 import { createLogger } from "./log.ts";
@@ -30,13 +31,22 @@ const notifier = createTelegramNotifier({
 
 const budgetRedis = new Redis(config.redisUrl);
 
+const agentOptions = {
+  model: config.model,
+  pricing: config.pricing,
+  redact,
+  injectionMode: config.injectionMode,
+  reasoningEffort: "low",
+  resources: {
+    domains: config.projectDomains,
+    containers: config.projectContainers,
+    codetrail: config.codetrail,
+  },
+} as const;
+
 const graph = buildIncidentGraph({
-  infraSpecialist: createInfraSpecialist({
-    model: config.model,
-    pricing: config.pricing,
-    redact,
-    reasoningEffort: "low",
-  }),
+  triage: createTriage(agentOptions),
+  specialists: createSpecialists(agentOptions),
   synthesizer: createSynthesizer({
     model: config.model,
     pricing: config.pricing,
@@ -45,10 +55,9 @@ const graph = buildIncidentGraph({
   }),
   notifier,
   redact,
-  projectDomains: config.projectDomains,
   budgetUsd: config.budgetUsd,
   dailyBudgetUsd: config.dailyBudgetUsd,
-  dailyBudget: createRedisDailyBudget(budgetRedis),
+  dailyBudget: createRedisDailyBudget(budgetRedis, { timeZone: config.budgetTimeZone }),
   checkpointer,
 });
 
@@ -63,6 +72,10 @@ log.info("orchestrator ready", {
   model: config.model,
   budgetUsd: config.budgetUsd,
   dailyBudgetUsd: config.dailyBudgetUsd,
+  budgetTimeZone: config.budgetTimeZone,
+  injectionMode: config.injectionMode,
+  codetrail: config.codetrail.baseUrl ? "configured" : "not_configured",
+  github: config.codetrail.githubToken ? "configured" : "not_configured",
 });
 
 const shutdown = async () => {

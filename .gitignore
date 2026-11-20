@@ -19,3 +19,7 @@ secrets/
 
 # local exports, never commit
 Personal-projects.csv
+
+# sandbox runtime (generated certs, nginx configs)
+sandbox/runtime/
+sandbox/results/*.tmp

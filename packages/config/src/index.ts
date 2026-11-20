@@ -36,12 +36,37 @@ const EnvSchema = z.object({
   INTAKE_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   /** Hard stop per incident (SPEC §8). */
   INCIDENT_BUDGET_USD: z.coerce.number().positive().default(0.5),
-  /** Hard stop per UTC day across all incidents (SPEC §8). */
+  /** Hard stop per calendar day across all incidents (SPEC §8). */
   DAILY_BUDGET_USD: z.coerce.number().positive().default(3),
+  /** IANA time zone that defines "a day" for the daily budget. */
+  BUDGET_TIMEZONE: z
+    .string()
+    .default("Asia/Seoul")
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat("en-CA", { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "must be a valid IANA time zone"),
   /** Same project+check inside this window is one incident. */
   DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(600),
   /** Optional JSON overriding PROJECT_DOMAINS, e.g. {"gotrip":["gotrip.uz"]}. */
   PROJECT_DOMAINS_JSON: z.string().optional(),
+  /** Container name prefixes docker_ps/docker_logs may see per project, e.g. {"gotrip":["ipsb-a-"]}. */
+  PROJECT_CONTAINERS_JSON: z.string().optional(),
+  /** CodeTrail HTTP API (search/explain). Unset = the code specialist's tools say "not_configured". */
+  CODETRAIL_BASE_URL: z.string().url().optional(),
+  CODETRAIL_API_KEY: z.string().min(1).optional(),
+  /** Our project id -> CodeTrail project_id, e.g. {"kervan":"kervan"} (identity when absent). */
+  CODETRAIL_PROJECT_IDS_JSON: z.string().optional(),
+  /** Fine-grained, READ-ONLY GitHub token (Contents + Metadata: read) for git_recent_commits. */
+  GITHUB_READONLY_TOKEN: z.string().min(1).optional(),
+  /** Our project id -> "owner/repo", e.g. {"kervan":"acme/kervan"}. */
+  PROJECT_REPOS_JSON: z.string().optional(),
+  /** "strip" removes injection-looking lines from tool output; "mark" only flags them. */
+  INJECTION_MODE: z.enum(["strip", "mark"]).default("strip"),
 });
 
 type Env = z.infer<typeof EnvSchema>;
@@ -72,21 +97,43 @@ export const DEFAULT_PROJECT_DOMAINS: Record<ProjectId, string[]> = {
   "food-lens": [],
 };
 
+function parseJson(name: string, raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new ConfigError([`${name}: not valid JSON`]);
+  }
+}
+
 export function resolveProjectDomains(overrideJson?: string): Record<ProjectId, string[]> {
   if (!overrideJson) return structuredClone(DEFAULT_PROJECT_DOMAINS);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(overrideJson);
-  } catch {
-    throw new ConfigError(["PROJECT_DOMAINS_JSON: not valid JSON"]);
-  }
   const schema = z.partialRecord(ProjectIdSchema, z.array(z.string().min(1)));
-  const result = schema.safeParse(parsed);
+  const result = schema.safeParse(parseJson("PROJECT_DOMAINS_JSON", overrideJson));
   if (!result.success) throw new ConfigError(["PROJECT_DOMAINS_JSON: wrong shape"]);
   return { ...structuredClone(DEFAULT_PROJECT_DOMAINS), ...result.data } as Record<
     ProjectId,
     string[]
   >;
+}
+
+/** Container name prefixes per project. Nothing is inspectable unless the operator lists it. */
+export function resolveProjectContainers(json?: string): Record<ProjectId, string[]> {
+  const empty = Object.fromEntries(
+    ProjectIdSchema.options.map((p) => [p, [] as string[]]),
+  ) as Record<ProjectId, string[]>;
+  if (!json) return empty;
+  const schema = z.partialRecord(ProjectIdSchema, z.array(z.string().min(1)));
+  const result = schema.safeParse(parseJson("PROJECT_CONTAINERS_JSON", json));
+  if (!result.success) throw new ConfigError(["PROJECT_CONTAINERS_JSON: wrong shape"]);
+  return { ...empty, ...result.data } as Record<ProjectId, string[]>;
+}
+
+/** A JSON object of string -> string (project id -> CodeTrail id / "owner/repo"). */
+export function resolveStringMap(name: string, json?: string): Record<string, string> | undefined {
+  if (!json) return undefined;
+  const result = z.record(z.string(), z.string()).safeParse(parseJson(name, json));
+  if (!result.success) throw new ConfigError([`${name}: wrong shape`]);
+  return result.data;
 }
 
 // ----------------------------------------------------------------- pricing
@@ -160,7 +207,15 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "REDIS_URL",
     "INCIDENT_BUDGET_USD",
     "DAILY_BUDGET_USD",
+    "BUDGET_TIMEZONE",
     "PROJECT_DOMAINS_JSON",
+    "PROJECT_CONTAINERS_JSON",
+    "CODETRAIL_BASE_URL",
+    "CODETRAIL_API_KEY",
+    "CODETRAIL_PROJECT_IDS_JSON",
+    "GITHUB_READONLY_TOKEN",
+    "PROJECT_REPOS_JSON",
+    "INJECTION_MODE",
   ] as const);
   const overrides: { input?: number; cachedInput?: number; output?: number } = {};
   if (c.MODEL_PRICE_INPUT_PER_M !== undefined) overrides.input = c.MODEL_PRICE_INPUT_PER_M;
@@ -178,7 +233,17 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     redisUrl: c.REDIS_URL,
     budgetUsd: c.INCIDENT_BUDGET_USD,
     dailyBudgetUsd: c.DAILY_BUDGET_USD,
+    budgetTimeZone: c.BUDGET_TIMEZONE,
     projectDomains: resolveProjectDomains(c.PROJECT_DOMAINS_JSON),
+    projectContainers: resolveProjectContainers(c.PROJECT_CONTAINERS_JSON),
+    codetrail: {
+      baseUrl: c.CODETRAIL_BASE_URL,
+      apiKey: c.CODETRAIL_API_KEY,
+      projectIds: resolveStringMap("CODETRAIL_PROJECT_IDS_JSON", c.CODETRAIL_PROJECT_IDS_JSON),
+      githubToken: c.GITHUB_READONLY_TOKEN,
+      repos: resolveStringMap("PROJECT_REPOS_JSON", c.PROJECT_REPOS_JSON),
+    },
+    injectionMode: c.INJECTION_MODE,
   };
 }
 

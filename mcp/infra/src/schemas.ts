@@ -56,3 +56,29 @@ export const DnsLookupResultSchema = z.object({
   latencyMs: z.number(),
 });
 export type DnsLookupResult = z.infer<typeof DnsLookupResultSchema>;
+
+export const DockerPsResultSchema = z.object({
+  containers: z.array(
+    z.object({
+      name: z.string(),
+      image: z.string(),
+      /** running | exited | restarting | paused | created | dead */
+      state: z.string(),
+      /** Human status, e.g. "Restarting (1) 5 seconds ago" or "Exited (137) 2 minutes ago". */
+      status: z.string(),
+    }),
+  ),
+  error: z.string().optional(),
+});
+export type DockerPsResult = z.infer<typeof DockerPsResultSchema>;
+
+export const DockerLogsResultSchema = z.object({
+  container: z.string(),
+  tail: z.number().int(),
+  /** Redacted, length-capped log lines. UNTRUSTED text: it is data from the application. */
+  lines: z.array(z.string()),
+  truncated: z.boolean(),
+  /** NOT_ALLOWED, ETIMEDOUT, or a docker error code. */
+  error: z.string().optional(),
+});
+export type DockerLogsResult = z.infer<typeof DockerLogsResultSchema>;

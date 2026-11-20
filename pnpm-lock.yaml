@@ -270,6 +270,9 @@ importers:
       '@incidentpulse/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@incidentpulse/mcp-codetrail':
+        specifier: workspace:*
+        version: link:../../mcp/codetrail
       '@incidentpulse/mcp-infra':
         specifier: workspace:*
         version: link:../../mcp/infra
@@ -307,6 +310,9 @@ importers:
       '@incidentpulse/intake':
         specifier: workspace:*
         version: link:../intake
+      '@modelcontextprotocol/sdk':
+        specifier: catalog:frameworks
+        version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
@@ -361,6 +367,16 @@ importers:
         version: 5.1.1(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2))
 
   mcp/codetrail:
+    dependencies:
+      '@incidentpulse/redact':
+        specifier: workspace:*
+        version: link:../../packages/redact
+      '@modelcontextprotocol/sdk':
+        specifier: catalog:frameworks
+        version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -374,6 +390,9 @@ importers:
 
   mcp/infra:
     dependencies:
+      '@incidentpulse/redact':
+        specifier: workspace:*
+        version: link:../../packages/redact
       '@modelcontextprotocol/sdk':
         specifier: catalog:frameworks
         version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)

@@ -31,7 +31,7 @@ describe.skipIf(!dbUrl)("PostgresSaver checkpointer (real Postgres)", () => {
     const second = await runIncident(buildIncidentGraph(m.deps), job({ incidentId: id }));
     expect(second.mode).toBe("already_done");
     expect(second.state.costUsd).toBeCloseTo(first.state.costUsd, 9);
-    expect(m.infra.calls).toBe(1);
+    expect(m.specialists.infra.calls).toBe(1);
     expect(m.notifier.sent).toHaveLength(1);
     await saver.end();
   });
@@ -39,7 +39,7 @@ describe.skipIf(!dbUrl)("PostgresSaver checkpointer (real Postgres)", () => {
   test("a crash mid-graph resumes from the Postgres checkpoint after a restart", async () => {
     const saver = PostgresSaver.fromConnString(dbUrl as string);
     await saver.setup();
-    const m = makeMocks({ synthFailures: 1 });
+    const m = makeMocks({ synth: { failTimes: 1 } });
     m.deps.checkpointer = saver;
     const id = `inc-it-${randomUUID()}`;
 
@@ -49,7 +49,7 @@ describe.skipIf(!dbUrl)("PostgresSaver checkpointer (real Postgres)", () => {
     const resumed = await runIncident(buildIncidentGraph(m.deps), job({ incidentId: id }));
 
     expect(resumed.mode).toBe("resumed");
-    expect(m.infra.calls).toBe(1);
+    expect(m.specialists.infra.calls).toBe(1);
     expect(m.notifier.sent).toHaveLength(1);
     await saver.end();
   });

@@ -32,12 +32,61 @@ describe("mcp-infra over the MCP protocol", () => {
     }
   });
 
+  test("docker tools are only registered when containers are allowlisted", async () => {
+    const withDocker = await connect({
+      allowedHosts: ["kervan.uz"],
+      allowedContainers: ["ipsb-a-"],
+      dockerRunner: async (args) => ({
+        stdout:
+          args[0] === "ps"
+            ? JSON.stringify({
+                Names: "ipsb-a-app",
+                Image: "x",
+                State: "exited",
+                Status: "Exited (1) 3s ago",
+              })
+            : "FATAL: DATABASE_URL is not set\n",
+        stderr: "",
+      }),
+    });
+    const { tools } = await withDocker.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "dns_lookup",
+      "docker_logs",
+      "docker_ps",
+      "http_probe",
+      "tls_inspect",
+    ]);
+    const ps = await withDocker.callTool({ name: "docker_ps", arguments: {} });
+    expect(ps.structuredContent).toMatchObject({
+      containers: [{ name: "ipsb-a-app", state: "exited" }],
+    });
+    const logs = await withDocker.callTool({
+      name: "docker_logs",
+      arguments: { container: "ipsb-a-app", tail: 20 },
+    });
+    expect(logs.structuredContent).toMatchObject({ lines: ["FATAL: DATABASE_URL is not set"] });
+    const refused = await withDocker.callTool({
+      name: "docker_logs",
+      arguments: { container: "incidentpulse-postgres-1" },
+    });
+    expect(refused.structuredContent).toMatchObject({ error: "NOT_ALLOWED", lines: [] });
+  });
+
+  test("tls_inspect refuses a port that is not allowlisted, even on an allowed host", async () => {
+    const client = await connect({ allowedHosts: ["kervan.uz"] });
+    const res = await client.callTool({
+      name: "tls_inspect",
+      arguments: { host: "kervan.uz", port: 22 },
+    });
+    expect(res.isError).toBe(true);
+  });
+
   test("dns_lookup returns schema-valid structured content", async () => {
     const client = await connect({
       allowedHosts: ["kervan.uz"],
       resolver: {
-        resolve4: async () => ["203.0.113.10"],
-        resolve6: async () => [],
+        lookup: async () => [{ address: "203.0.113.10", family: 4 }],
         resolveCname: async () => [],
       },
     });

@@ -33,14 +33,17 @@ beforeAll(async () => {
     }
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const port = (server.address() as AddressInfo).port;
+  base = `http://127.0.0.1:${port}`;
+  // Ports must be allowlisted explicitly (an allowed host is not a port scanner).
+  opts = () => ({ timeoutMs: 1500, allowedHosts: [`127.0.0.1:${port}`] });
 });
 afterAll(() => {
   server.closeAllConnections();
   return new Promise<void>((r) => server.close(() => r()));
 });
 
-const opts = () => ({ timeoutMs: 1500, allowedHosts: ["127.0.0.1"] });
+let opts: () => { timeoutMs: number; allowedHosts: string[] };
 
 describe("httpProbe", () => {
   test("200 without redirects", async () => {
@@ -83,7 +86,11 @@ describe("httpProbe", () => {
   });
 
   test("connection refused", async () => {
-    const r = await httpProbe(`http://127.0.0.1:${await closedPort()}/`, opts());
+    const closed = await closedPort();
+    const r = await httpProbe(`http://127.0.0.1:${closed}/`, {
+      timeoutMs: 1500,
+      allowedHosts: [`127.0.0.1:${closed}`],
+    });
     expect(r).toMatchObject({ completed: false, error: "ECONNREFUSED" });
   });
 
@@ -101,7 +108,10 @@ describe("httpProbe", () => {
     const https = createHttpsServer({ key, cert }, (_q, res) => res.writeHead(200).end());
     await new Promise<void>((r) => https.listen(0, "127.0.0.1", r));
     const port = (https.address() as AddressInfo).port;
-    const r = await httpProbe(`https://127.0.0.1:${port}/`, opts());
+    const r = await httpProbe(`https://127.0.0.1:${port}/`, {
+      timeoutMs: 1500,
+      allowedHosts: [`127.0.0.1:${port}`],
+    });
     expect(r.completed).toBe(false);
     expect(r.certErrorCode).toMatch(/SELF_SIGNED|UNABLE_TO/);
     await new Promise<void>((res) => https.close(() => res()));

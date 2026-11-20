@@ -11,16 +11,19 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "node --env-file-if-exists=../../.env src/main.ts",
-    "show": "node --env-file-if-exists=../../.env scripts/show-incident.ts"
+    "show": "node --env-file-if-exists=../../.env scripts/show-incident.ts",
+    "sandbox:eval": "NODE_EXTRA_CA_CERTS=../../sandbox/runtime/certs/ca.pem node --env-file-if-exists=../../.env scripts/sandbox-eval.ts"
   },
   "devDependencies": {
     "@incidentpulse/intake": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:frameworks",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "dependencies": {
     "@incidentpulse/config": "workspace:*",
+    "@incidentpulse/mcp-codetrail": "workspace:*",
     "@incidentpulse/mcp-infra": "workspace:*",
     "@incidentpulse/redact": "workspace:*",
     "@incidentpulse/schemas": "workspace:*",

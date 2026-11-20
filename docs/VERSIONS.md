@@ -22,6 +22,7 @@ TypeScript pins live in the `catalog` / `catalogs.frameworks` sections of `pnpm-
 | httpx2 | 2.16.2 | Starlette's TestClient now deprecates `httpx` in favour of `httpx2` |
 | jsonschema | 4.26.0 | contract tests in the Python services |
 | PostgreSQL / Redis | `postgres:18.7-alpine` / `redis:8.8-alpine` | 19.0 exists but is brand new; 18 chosen |
+| Sandbox images | `nginx:1.31-alpine`, `node:24-alpine` | `compose.sandbox.yaml` (local fault-injection only) |
 
 ## Frameworks (adopted in later phases)
 
@@ -51,6 +52,10 @@ but they are not installed by default.
 no bug fixes, no security fixes, no support, and points to Microsoft Agent Framework (MAF) as the successor. Last release:
 `python-v0.7.5` (2025-09-30). MAF 1.x is the current line (PyPI `agent-framework` 1.26.0, Production/Stable, Python 3.12 supported).
 `ag2` is a community fork, not Microsoft. Owner decision (2026-11-21): Microsoft Agent Framework. Details: [ADR-004](adr/ADR-004-autogen-or-agent-framework.md).
+
+## Budget day
+
+The daily budget's "day" is the calendar day in `BUDGET_TIMEZONE` (default `Asia/Seoul`, UTC+9, no DST), changed from UTC on 2026-11-21 at the owner's request.
 
 ## Node 24 vs 26
 

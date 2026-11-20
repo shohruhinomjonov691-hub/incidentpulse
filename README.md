@@ -5,7 +5,7 @@ waits for human approval, executes, verifies recovery and writes a postmortem.
 
 Full design: [docs/SPEC.md](docs/SPEC.md). Pinned versions: [docs/VERSIONS.md](docs/VERSIONS.md). Decisions: [docs/adr/](docs/adr/).
 
-**Status: Phase 0 (skeleton).** Packages are empty shells with a smoke test. Real functionality starts in Phase 1.
+**Status: Phase 2 (multi-agent).** Signal → triage (handoffs) → parallel infra / logs / code specialists → synthesize → Telegram report. Phase 3 (debate verifier) and later are not started.
 
 ## Prerequisites
 
@@ -23,6 +23,7 @@ pnpm generate                                  # regenerate packages/schemas/jso
 cd services/debate-verifier && uv sync && uv run pytest     # likewise for services/postmortem-crew
 
 docker compose up -d                           # postgres + redis on 127.0.0.1 only
+sandbox/scripts/sandbox.sh up                  # toy apps for the fault-injection evals (local only)
 ```
 
 ## Layout
@@ -32,7 +33,8 @@ apps/       orchestrator, intake, web, telegram-bot      (TypeScript)
 mcp/        infra, codetrail, actions                    (TypeScript MCP servers)
 packages/   schemas, redact, config, telemetry           (TypeScript)
 services/   debate-verifier, postmortem-crew             (Python 3.12, FastAPI)
-runbooks/ sandbox/ evals/ templates/                     (later phases)
+sandbox/ + compose.sandbox.yaml  local fault-injection stack (scenarios 1-6, 12)
+runbooks/ evals/ templates/                              (later phases)
 ```
 
 `packages/schemas` is the TS ↔ Python contract: zod schemas generate JSON Schema, and both languages validate the same fixture.

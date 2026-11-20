@@ -2,53 +2,64 @@ import { promises as dnsPromises } from "node:dns";
 import { type DnsLookupResult, DnsLookupResultSchema } from "../schemas.ts";
 
 export interface DnsResolver {
-  resolve4(host: string): Promise<string[]>;
-  resolve6(host: string): Promise<string[]>;
+  /** getaddrinfo semantics: honours /etc/hosts and the OS resolver, like the apps do. */
+  lookup(host: string): Promise<Array<{ address: string; family: number }>>;
   resolveCname(host: string): Promise<string[]>;
 }
 
 export function createSystemResolver(timeoutMs: number): DnsResolver {
   const resolver = new dnsPromises.Resolver({ timeout: timeoutMs, tries: 1 });
   return {
-    resolve4: (h) => resolver.resolve4(h),
-    resolve6: (h) => resolver.resolve6(h),
+    lookup: (h) => dnsPromises.lookup(h, { all: true }),
     resolveCname: (h) => resolver.resolveCname(h),
   };
 }
 
 const EMPTY_OK = new Set(["ENODATA", "ENOTFOUND"]);
 
-/** Read-only A/AAAA/CNAME lookup. A failed record type is data, not an exception. */
+/** Read-only A/AAAA/CNAME lookup. A failed lookup is data, not an exception. */
 export async function dnsLookup(
   host: string,
   options: { timeoutMs: number; resolver?: DnsResolver },
 ): Promise<DnsLookupResult> {
   const resolver = options.resolver ?? createSystemResolver(options.timeoutMs);
   const started = Date.now();
-  const attempt = async (fn: () => Promise<string[]>) => {
-    try {
-      return { records: await fn(), code: undefined as string | undefined };
-    } catch (e) {
-      return { records: [] as string[], code: (e as NodeJS.ErrnoException).code ?? "DNS_ERROR" };
-    }
-  };
-  const [a, aaaa, cname] = await Promise.all([
-    attempt(() => resolver.resolve4(host)),
-    attempt(() => resolver.resolve6(host)),
-    attempt(() => resolver.resolveCname(host)),
+
+  const withDeadline = <T>(p: Promise<T>): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(Object.assign(new Error("timeout"), { code: "ETIMEOUT" })),
+          options.timeoutMs,
+        ).unref(),
+      ),
+    ]);
+
+  const [addresses, cnames] = await Promise.all([
+    withDeadline(resolver.lookup(host)).then(
+      (records) => ({ records, code: undefined as string | undefined }),
+      (e: NodeJS.ErrnoException) => ({
+        records: [] as Array<{ address: string; family: number }>,
+        code: e.code ?? "DNS_ERROR",
+      }),
+    ),
+    withDeadline(resolver.resolveCname(host)).then(
+      (records) => ({ records, code: undefined as string | undefined }),
+      (e: NodeJS.ErrnoException) => ({ records: [] as string[], code: e.code ?? "DNS_ERROR" }),
+    ),
   ]);
 
   const result: DnsLookupResult = {
     host,
-    a: a.records,
-    aaaa: aaaa.records,
-    cname: cname.records,
+    a: addresses.records.filter((r) => r.family === 4).map((r) => r.address),
+    aaaa: addresses.records.filter((r) => r.family === 6).map((r) => r.address),
+    cname: cnames.records,
     latencyMs: Date.now() - started,
   };
-  const total = a.records.length + aaaa.records.length + cname.records.length;
-  if (total === 0) {
+  if (result.a.length + result.aaaa.length + result.cname.length === 0) {
     // Prefer a real failure (SERVFAIL/timeout) over "no data" so the cause is visible.
-    const codes = [a.code, aaaa.code, cname.code].filter((c): c is string => !!c);
+    const codes = [addresses.code, cnames.code].filter((c): c is string => !!c);
     result.error = codes.find((c) => !EMPTY_OK.has(c)) ?? codes[0] ?? "ENODATA";
   }
   return DnsLookupResultSchema.parse(result);

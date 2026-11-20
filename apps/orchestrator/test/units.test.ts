@@ -333,3 +333,29 @@ describe("escalation message", () => {
     expect(text.length).toBeLessThan(200);
   });
 });
+
+describe("evidence shown in Telegram is de-duplicated", () => {
+  test("the same fact found by triage and by a specialist appears once, and the 3-line cap applies to distinct facts", () => {
+    const same = { ...tlsMismatchEvidence("t1") };
+    const dup = { ...tlsMismatchEvidence("i1") };
+    const other = {
+      ...tlsMismatchEvidence("i2"),
+      excerpt: "http_probe(kervan.uz): completed=false",
+    };
+    const text = formatReport({
+      incidentId: "inc-1",
+      project: "kervan",
+      evidence: [same, dup, other],
+      hypotheses: [
+        { id: "h1", cause: "x", supportingEvidenceIds: ["t1", "i1", "i2"], confidence: 0.9 },
+      ],
+      costUsd: 0,
+      overBudget: null,
+      budgetUsd: 0.5,
+      dailyBudgetUsd: 3,
+    });
+    const line = text.split("\n").find((l) => l.startsWith("Dalil:")) as string;
+    expect(line.split(" · ")).toHaveLength(2);
+    expect(line.match(/tls_inspect\(kervan\.uz\)/g)).toHaveLength(1);
+  });
+});

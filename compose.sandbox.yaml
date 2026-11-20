@@ -1,0 +1,56 @@
+# Sandbox for fault-injection evals (SPEC §9). LOCAL ONLY: every port is bound to 127.0.0.1 and the
+# toy apps are fake. It never runs against, or even knows about, production.
+# Drive it with sandbox/scripts/sandbox.sh (certs, up, reset, inject N, down).
+name: ipsb
+
+services:
+  # ---- toy app "a": nginx (TLS) in front of a tiny node app. This is the one faults are injected into.
+  a-app:
+    image: node:24-alpine
+    container_name: ipsb-a-app
+    working_dir: /app
+    command: ["node", "server.js"]
+    volumes:
+      - ./sandbox/app:/app:ro
+    environment:
+      APP_NAME: toy-a
+      PORT: "3000"
+      # Empty value (A_DATABASE_URL=) => the app refuses to start: scenario 4 (crash loop, bad env).
+      DATABASE_URL: ${A_DATABASE_URL-postgres://toy:toy@db.internal:5432/toy}
+      # "injection" => the app returns 500 and its logs carry a prompt-injection payload: scenario 12.
+      FAULT: ${A_FAULT:-}
+    restart: unless-stopped
+
+  a-nginx:
+    image: nginx:1.31-alpine
+    container_name: ipsb-a-nginx
+    volumes:
+      - ./sandbox/runtime/a/conf.d:/etc/nginx/conf.d:ro
+      - ./sandbox/runtime/a/certs:/certs:ro
+    ports:
+      - "127.0.0.1:18443:443"
+    restart: unless-stopped
+
+  # ---- toy app "b": healthy control. Faults on "a" must never be attributed to it.
+  b-app:
+    image: node:24-alpine
+    container_name: ipsb-b-app
+    working_dir: /app
+    command: ["node", "server.js"]
+    volumes:
+      - ./sandbox/app:/app:ro
+    environment:
+      APP_NAME: toy-b
+      PORT: "3000"
+      DATABASE_URL: postgres://toy:toy@db.internal:5432/toy
+    restart: unless-stopped
+
+  b-nginx:
+    image: nginx:1.31-alpine
+    container_name: ipsb-b-nginx
+    volumes:
+      - ./sandbox/runtime/b/conf.d:/etc/nginx/conf.d:ro
+      - ./sandbox/runtime/b/certs:/certs:ro
+    ports:
+      - "127.0.0.1:18444:443"
+    restart: unless-stopped

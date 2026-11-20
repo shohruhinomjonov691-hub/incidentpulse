@@ -1,4 +1,4 @@
-import { isAllowedHost } from "../allowlist.ts";
+import { isAllowedTarget } from "../allowlist.ts";
 import { type HttpProbeResult, HttpProbeResultSchema } from "../schemas.ts";
 
 const MAX_REDIRECTS = 5;
@@ -47,7 +47,8 @@ export async function httpProbe(url: string, options: HttpProbeOptions): Promise
     if (!/^https?:$/.test(current.protocol) || current.username || current.password) {
       return done({ completed: false, error: "UNSUPPORTED_URL" });
     }
-    if (!isAllowedHost(current.hostname, options.allowedHosts)) {
+    const port = Number(current.port || (current.protocol === "https:" ? 443 : 80));
+    if (!isAllowedTarget(current.hostname, port, options.allowedHosts)) {
       return done({ completed: false, error: "HOST_NOT_ALLOWED", blockedRedirect: current.origin });
     }
     let response: Response;

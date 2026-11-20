@@ -8,8 +8,9 @@ import {
   type RedisLike,
 } from "../src/daily-budget.ts";
 
-const DAY1 = new Date("2026-11-21T23:59:59.000Z");
-const DAY2 = new Date("2026-11-22T00:00:00.000Z");
+// Seoul is UTC+9 (no DST): 14:59:59Z is the last second of Nov 21 there, 15:00:00Z is Nov 22 00:00.
+const DAY1 = new Date("2026-11-21T14:59:59.000Z");
+const DAY2 = new Date("2026-11-21T15:00:00.000Z");
 
 /** A minimal fake of the Redis commands we use, to verify keys / TTLs / integer maths. */
 function fakeRedis() {
@@ -33,14 +34,26 @@ function fakeRedis() {
 }
 
 describe("dayKey", () => {
-  test("is the UTC calendar day", () => {
-    expect(dayKey(new Date("2026-11-21T23:59:59.999Z"))).toBe("2026-11-21");
-    expect(dayKey(new Date("2026-11-22T00:00:00.000Z"))).toBe("2026-11-22");
+  test("defaults to the Asia/Seoul calendar day (not UTC)", () => {
+    expect(dayKey(new Date("2026-11-21T14:59:59.999Z"))).toBe("2026-11-21");
+    expect(dayKey(new Date("2026-11-21T15:00:00.000Z"))).toBe("2026-11-22");
+    // In UTC this instant is still Nov 21; in Seoul it is already Nov 22.
+    expect(dayKey(new Date("2026-11-21T20:00:00.000Z"), "UTC")).toBe("2026-11-21");
+    expect(dayKey(new Date("2026-11-21T20:00:00.000Z"))).toBe("2026-11-22");
+  });
+
+  test("honours another IANA zone", () => {
+    expect(dayKey(new Date("2026-11-21T04:00:00.000Z"), "America/Los_Angeles")).toBe("2026-11-20");
+  });
+
+  test("the boundary is the same all year (Seoul has no DST)", () => {
+    expect(dayKey(new Date("2026-07-01T14:59:59.000Z"))).toBe("2026-07-01");
+    expect(dayKey(new Date("2026-07-01T15:00:00.000Z"))).toBe("2026-07-02");
   });
 });
 
 describe("createRedisDailyBudget (fake Redis)", () => {
-  test("stores integer micro-USD under a per-day key and sets a TTL", async () => {
+  test("stores integer micro-USD under a per-Seoul-day key and sets a TTL", async () => {
     const { redis, data, ttl } = fakeRedis();
     const budget = createRedisDailyBudget(redis, { keyPrefix: "t" });
     expect(await budget.spentUsd(DAY1)).toBe(0);
@@ -57,11 +70,18 @@ describe("createRedisDailyBudget (fake Redis)", () => {
     expect(total).toBe(3);
   });
 
-  test("a new UTC day starts at zero and does not touch yesterday's counter", async () => {
+  test("a new Seoul day starts at zero and does not touch yesterday's counter", async () => {
     const budget = createRedisDailyBudget(fakeRedis().redis);
     await budget.addUsd(2.5, DAY1);
     expect(await budget.spentUsd(DAY2)).toBe(0);
     expect(await budget.spentUsd(DAY1)).toBe(2.5);
+  });
+
+  test("the time zone is configurable", async () => {
+    const { redis, data } = fakeRedis();
+    const utc = createRedisDailyBudget(redis, { keyPrefix: "u", timeZone: "UTC" });
+    await utc.addUsd(1, DAY2); // 15:00Z Nov 21 is still Nov 21 in UTC
+    expect([...data.keys()]).toEqual(["u:2026-11-21"]);
   });
 
   test.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects spend %s", async (bad) => {
