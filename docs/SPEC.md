@@ -67,7 +67,7 @@ Languages: **TypeScript** (core, MCP, web, bot) + **Python** (Agent Framework an
  │                 └──────► synthesize hypotheses ◄──────┘       │
  │                              │                                │
  │                              ▼                                │
- │                     debate verify (AutoGen svc)               │
+ │                debate verify (Agent Framework svc)            │
  │               confidence < 0.7 and iter < 3 ──► back to triage│
  │                              │                                │
  │                              ▼                                │
@@ -117,7 +117,7 @@ type IncidentState = {
 | `triage` | Agents SDK `Agent` with `handoffs: [infra, code, logs]` | category + which specialists to run |
 | `investigate` | LangGraph `Send` fan-out, each specialist = Agents SDK agent with its MCP tools | evidence[] |
 | `synthesize` | LLM, structured output (zod) | ranked hypotheses |
-| `verify` | HTTP → `svc-debate` (AutoGen) | verdict + confidence + dissent |
+| `verify` | HTTP → `svc-debate` (Microsoft Agent Framework) | verdict + confidence + dissent |
 | `route_after_verify` | conditional edge | `investigate` (with "what's missing" notes) or `propose` or `escalate` |
 | `propose` | LLM picks a runbook **from the registry only** + dry-run | remediation |
 | `await_approval` | `interrupt()`; resumes on Telegram/web callback | approval |
@@ -136,7 +136,7 @@ type IncidentState = {
 | Infra specialist | Agents SDK | `tls_inspect`, `dns_lookup`, `http_probe`, `docker_ps`, `nginx_test`, `disk_usage`, `cert_list` | Read-only |
 | Code specialist | Agents SDK | `codetrail_search`, `codetrail_explain`, `git_recent_commits`, `git_diff_summary` | Uses the existing CodeTrail RAG |
 | Logs specialist | Agents SDK | `docker_logs` (tail ≤ 500 lines, redacted), `pm2_logs` (Kervan), `error_signature` | Returns excerpts + hashes, never raw secrets |
-| Investigator / Skeptic / Judge | AutoGen | none (evidence only) | Skeptic must name the weakest evidence link |
+| Investigator / Skeptic / Judge | Microsoft Agent Framework | none (evidence only) | Skeptic must name the weakest evidence link |
 | Researcher / Reviewer / Writer | CrewAI | read the incident record API | Writer output follows `templates/postmortem.md` |
 
 Guardrails (Agents SDK):
@@ -261,7 +261,7 @@ incidentpulse/
   mcp/
     infra/  codetrail/  actions/
   services/
-    debate-verifier/    # Python, AutoGen, FastAPI
+    debate-verifier/    # Python, Microsoft Agent Framework, FastAPI
     postmortem-crew/    # Python, CrewAI, FastAPI
   packages/
     schemas/            # zod + generated JSON Schema (shared TS<->Python contracts)
@@ -291,7 +291,7 @@ Tooling: pnpm workspaces + Turborepo, Node 24, TypeScript strict, Vitest; Python
 | **0 — Skeleton** (2–3 days) | monorepo, compose (postgres, redis), schemas package, CI, ADR-001..011 stubs | `pnpm test` + `uv run pytest` green in CI |
 | **1 — MVP RCA** (1 week) | intake + LangGraph graph (intake → infra specialist → synthesize) + mcp-infra (tls/http/dns) + Telegram read-only report | Real Kervan TLS error → Telegram message with correct cause + evidence |
 | **2 — Multi-agent** (1 week) | Agents SDK triage + handoffs, code + logs specialists, mcp-codetrail, parallel fan-out, guardrails | Sandbox scenarios 1–6 classified correctly |
-| **3 — Debate loop** (4–5 days) | AutoGen debate-verifier service, verify → re-investigate cycle, confidence routing | Loop visible in the trace; low-confidence cases re-investigate or escalate |
+| **3 — Debate loop** (4–5 days) | Microsoft Agent Framework debate-verifier service, verify → re-investigate cycle, confidence routing | Loop visible in the trace; low-confidence cases re-investigate or escalate |
 | **4 — Human-in-the-loop + actions** (1 week) | interrupt/resume, approval tokens, mcp-actions + runbooks, verify_recovery, kill-switch | Approve in Telegram → cert renewed in sandbox → 🟢 recovered message |
 | **5 — Postmortem + UI** (1 week) | CrewAI service, Next.js + Vercel AI SDK live timeline + "ask this incident" | Postmortem markdown linked in Telegram; timeline streams live |
 | **6 — Evals + observability** (1 week) | 14 scenarios, promptfoo, LLM judge, Langfuse, CI gate, eval dashboard | Accuracy, cost and unsafe-attempts numbers published in the README |
@@ -302,9 +302,9 @@ Tooling: pnpm workspaces + Turborepo, Node 24, TypeScript strict, Vitest; Python
 ## 14. README / resume outputs
 - Architecture diagram, 90-second demo video (real Kervan incident), eval table, cost per incident.
 - Resume bullet template:
-  *"Built IncidentPulse, a polyglot multi-agent incident responder (LangGraph.js, OpenAI Agents SDK, AutoGen, CrewAI, MCP) monitoring 6 production apps — triage→specialist handoffs, debate-based verification, human-in-the-loop remediation via Telegram; **X%** RCA accuracy on a 14-scenario fault-injection eval, **$Y**/incident, 0 unsafe actions."*
+  *"Built IncidentPulse, a polyglot multi-agent incident responder (LangGraph.js, OpenAI Agents SDK, Microsoft Agent Framework, CrewAI, MCP) monitoring 6 production apps — triage→specialist handoffs, debate-based verification, human-in-the-loop remediation via Telegram; **X%** RCA accuracy on a 14-scenario fault-injection eval, **$Y**/incident, 0 unsafe actions."*
 
 ## 15. Open decisions
 1. LLM providers: OpenAI for Agents SDK agents; Anthropic optional for synthesize/judge (via the Agents SDK model-provider interface or LiteLLM).
-2. AutoGen vs Microsoft Agent Framework: check the current status at Phase 3 start and pin a version.
+2. ~~AutoGen vs Microsoft Agent Framework~~ **Resolved 2026-11-21 (ADR-004):** Microsoft Agent Framework (`agent-framework-core`, pinned 1.26.0); the AutoGen repository is archived. Confirm the exact package split at Phase 3 start.
 3. Langfuse Cloud vs self-host (decide after checking VPS RAM).

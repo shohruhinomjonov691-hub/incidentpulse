@@ -42,4 +42,4 @@ Sources: https://github.com/microsoft/autogen · https://github.com/microsoft/ag
 | B. AG2 community fork (1.3.3) | Keeps the AutoGen-style conversation model | Community project, not Microsoft |
 | C. Pin `autogen-agentchat` 0.7.5 | Matches the wording of SPEC §2 literally | Archived: no security fixes. Not recommended |
 
-**Decision:** A. SPEC §2 was updated to match. Other SPEC sections (§3, §4, §11, §13, §14, §15.2) still say "AutoGen" in prose and diagrams; they are historical wording and are not changed unless the owner asks.
+**Decision:** A. SPEC was updated to match (§2, §3, §4, §11, §13, §14, §15.2). The service directory keeps the name `services/debate-verifier`.
