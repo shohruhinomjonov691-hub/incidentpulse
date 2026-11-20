@@ -16,11 +16,7 @@
         "at": "2026-11-20T23:22:38.057Z"
       },
       "costUsd": 0.0066711999999999995,
-      "audit": [
-        "approved",
-        "execution_claimed",
-        "execution_finished"
-      ],
+      "audit": ["approved", "execution_claimed", "execution_finished"],
       "debate": [
         {
           "at": "2026-11-20T23:05:50.051Z",
@@ -47,11 +43,7 @@
         "at": "2026-11-20T23:23:52.158Z"
       },
       "costUsd": 0.0131261,
-      "audit": [
-        "approved",
-        "execution_claimed",
-        "execution_finished"
-      ],
+      "audit": ["approved", "execution_claimed", "execution_finished"],
       "debate": [
         {
           "at": "2026-11-20T23:23:16.252Z",
