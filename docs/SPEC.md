@@ -33,7 +33,7 @@ Each choice gets a short ADR in `docs/adr/`. "Used because it fits", not "used b
 | ADR-001 | **LangGraph.js** | Top-level incident state machine: cycles (investigate → verify → re-investigate), parallel fan-out, `interrupt()` for human approval, durable checkpoints | Only option here with first-class cycles + durable human-in-the-loop pauses that survive restarts |
 | ADR-002 | **OpenAI Agents SDK (JS)** | Triage agent + **handoffs** to specialist agents; tool calling; input/output **guardrails** | Handoffs and guardrails are native primitives; specialists stay small and testable |
 | ADR-003 | **Model Context Protocol (TS SDK)** | All tools are exposed via 3 MCP servers (infra / codetrail / actions) | Tools become reusable by any client (Claude, Cursor, Agents SDK), and the permission boundary sits at the process level |
-| ADR-004 | **AutoGen** (or its successor, Microsoft Agent Framework; pin whichever is current) — Python | **Debate verifier**: Investigator vs Skeptic with a Judge, who scores the top hypothesis | Multi-agent conversation/debate is its core pattern; it reduces confident-but-wrong RCAs |
+| ADR-004 | **Microsoft Agent Framework** (`agent-framework-core`; successor to the archived AutoGen) — Python | **Debate verifier**: Investigator vs Skeptic with a Judge, who scores the top hypothesis | Maintained 1.x line with multi-agent orchestration and graph workflows; AutoGen is archived (no security fixes) and Agent Framework is its designated successor |
 | ADR-005 | **CrewAI** — Python | **Postmortem crew**: Researcher → Reviewer → Writer | Role/task-based sequential crews fit document production well |
 | ADR-006 | **Vercel AI SDK** + Next.js | Live incident timeline streaming, chat with an incident ("why did you conclude X?"), approval UI | Streaming UI primitives; the same tool-call events render as a live timeline |
 | ADR-007 | **Langfuse** + OpenTelemetry | Trace every node, agent, tool call, token and $ cost | Agent observability and eval scoring in one place |
@@ -42,7 +42,7 @@ Each choice gets a short ADR in `docs/adr/`. "Used because it fits", not "used b
 | ADR-010 | **grammY** | Telegram bot: alerts, inline Approve/Reject, `/status`, `/stop` | Already the planned Telegram stack in Personal HQ |
 | ADR-011 | **promptfoo** + custom harness | Eval runner, LLM-as-judge, CI regression gate | Declarative eval configs, works in GitHub Actions |
 
-Languages: **TypeScript** (core, MCP, web, bot) + **Python** (AutoGen and CrewAI services), connected over HTTP with JSON Schema contracts.
+Languages: **TypeScript** (core, MCP, web, bot) + **Python** (Agent Framework and CrewAI services), connected over HTTP with JSON Schema contracts.
 
 ---
 
@@ -97,8 +97,8 @@ type IncidentState = {
   project: ProjectId;                // 'kervan' | 'gotrip' | ...
   signal: { check: string; level: string; summary: string; at: string };
   category?: 'tls' | 'dns' | 'http_5xx' | 'timeout' | 'container_down' | 'deploy_regression' | 'resource' | 'unknown';
-  evidence: Evidence[];              // { source, tool, excerpt (redacted), at, hash }
-  hypotheses: Hypothesis[];          // { id, cause, supportingEvidenceIds, confidence }
+  evidence: Evidence[];              // { id, source, tool, excerpt (redacted), at, hash }
+  hypotheses: Hypothesis[];          // { id, cause, supportingEvidenceIds (Evidence.id), confidence }
   verdict?: { hypothesisId: string; confidence: number; dissent?: string };
   iteration: number;                 // investigate loop counter, max 3
   remediation?: { runbookId: RunbookId; params: Record<string,string>; risk: 'low'|'medium'; dryRunOutput?: string };

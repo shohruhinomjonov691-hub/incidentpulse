@@ -30,7 +30,7 @@ TypeScript pins live in the `catalog` / `catalogs.frameworks` sections of `pnpm-
 | 001 | `@langchain/langgraph` / `-checkpoint-postgres` | 1.7.5 / 1.1.4 |
 | 002 | `@openai/agents` | 0.22.0 |
 | 003 | `@modelcontextprotocol/sdk` | 1.32.2 |
-| 004 | `agent-framework-core` (**proposed**, pending owner decision) | 1.26.0 |
+| 004 | `agent-framework-core` (**accepted** 2026-11-21) | 1.26.0 |
 | 005 | `crewai` | 1.15.44 |
 | 006 | `ai` / `next` | 7.0.178 / 16.4.6 |
 | 007 | `@langfuse/client`, `tracing`, `otel` / Python `langfuse` | 6.1.1 / 5.2.0 |
@@ -48,7 +48,7 @@ but they are not installed by default.
 **AutoGen is archived, not merely in maintenance mode.** `microsoft/autogen` has `archived: true` (last push 2026-11-12); its README says
 no bug fixes, no security fixes, no support, and points to Microsoft Agent Framework (MAF) as the successor. Last release:
 `python-v0.7.5` (2025-09-30). MAF 1.x is the current line (PyPI `agent-framework` 1.26.0, Production/Stable, Python 3.12 supported).
-`ag2` is a community fork, not Microsoft. Details and options: [ADR-004](adr/ADR-004-autogen-or-agent-framework.md).
+`ag2` is a community fork, not Microsoft. Owner decision (2026-11-21): Microsoft Agent Framework. Details: [ADR-004](adr/ADR-004-autogen-or-agent-framework.md).
 
 ## Node 24 vs 26
 
@@ -61,5 +61,4 @@ No action needed now; worth revisiting before Phase 7.
 - `ProjectId` values: `gotrip | kervan | camera-studio | codetrail | findit | food-lens` (the spec only says `'kervan' | 'gotrip' | ...`).
 - Timestamps (`at`) are validated as ISO-8601 strings (the spec says `string`).
 - Objects are strict (unknown keys rejected).
-- **Spec gap:** `Hypothesis.supportingEvidenceIds` references evidence ids, but `Evidence` has no `id` field (§3.1). Proposed fix: add `id: string` to `Evidence`.
-  Not applied; `docs/SPEC.md` is unchanged.
+- Resolved 2026-11-21: `Evidence` gained `id: string` (SPEC §3.1 updated); `Hypothesis.supportingEvidenceIds` references it.

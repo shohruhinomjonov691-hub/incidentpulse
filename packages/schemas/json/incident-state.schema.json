@@ -60,6 +60,9 @@
       "items": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },
@@ -79,6 +82,7 @@
           }
         },
         "required": [
+          "id",
           "source",
           "tool",
           "excerpt",

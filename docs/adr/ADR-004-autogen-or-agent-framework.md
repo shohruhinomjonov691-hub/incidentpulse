@@ -1,6 +1,6 @@
-# ADR-004: Debate verifier framework: AutoGen vs Microsoft Agent Framework
+# ADR-004: Microsoft Agent Framework for the debate verifier (instead of AutoGen)
 
-- **Status:** **Proposed. Decision needed from the owner.** SPEC §2 and §15.2 allow either framework; this records the finding.
+- **Status:** **Accepted** (owner decision, 2026-11-21): Microsoft Agent Framework, package `agent-framework-core`.
 - **Date:** 2026-11-21
 - **Spec reference:** [docs/SPEC.md](../SPEC.md) §2, row ADR-004
 
@@ -10,9 +10,9 @@
 
 ## Decision
 
-Use the framework listed in SPEC §2 for this role. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
+Use **Microsoft Agent Framework** (Python) for the debate verifier (Investigator vs Skeptic, Judge). AutoGen is not used: its repository is archived. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
 
-- Proposed: `agent-framework-core` 1.26.0 (Microsoft Agent Framework, Python)
+- `agent-framework-core` 1.26.0 (declared as the optional `agents` extra of `services/debate-verifier`; the exact package split is confirmed when Phase 3 starts)
 
 ## Why this and not another
 
@@ -34,7 +34,7 @@ TODO.
 
 Sources: https://github.com/microsoft/autogen · https://github.com/microsoft/agent-framework · https://learn.microsoft.com/en-us/agent-framework/overview/ · https://pypi.org/project/agent-framework-core/
 
-## Options
+## Options considered
 
 | Option | Pros | Cons |
 |---|---|---|
@@ -42,4 +42,4 @@ Sources: https://github.com/microsoft/autogen · https://github.com/microsoft/ag
 | B. AG2 community fork (1.3.3) | Keeps the AutoGen-style conversation model | Community project, not Microsoft |
 | C. Pin `autogen-agentchat` 0.7.5 | Matches the wording of SPEC §2 literally | Archived: no security fixes. Not recommended |
 
-**Recommendation:** A. SPEC §2 already says "or its successor, Microsoft Agent Framework; pin whichever is current", so no SPEC change is required, but SPEC prose that says "AutoGen" (§2 table, §3, §4, §11, §13, §14) would read more accurately if updated. That is a proposal for the owner, not applied.
+**Decision:** A. SPEC §2 was updated to match. Other SPEC sections (§3, §4, §11, §13, §14, §15.2) still say "AutoGen" in prose and diagrams; they are historical wording and are not changed unless the owner asks.

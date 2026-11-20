@@ -45,6 +45,20 @@ describe("IncidentState schema (SPEC.md §3.1)", () => {
       },
     ],
     ["invalid approval status", { approval: { status: "maybe" } }],
+    [
+      "evidence without an id",
+      {
+        evidence: [
+          {
+            source: "mcp-infra",
+            tool: "tls_inspect",
+            excerpt: "x",
+            at: "2026-11-21T04:00:00Z",
+            hash: "h",
+          },
+        ],
+      },
+    ],
   ])("rejects %s", (_name, patch) => {
     expect(IncidentStateSchema.safeParse({ ...valid, ...patch }).success).toBe(false);
   });

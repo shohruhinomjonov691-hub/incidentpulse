@@ -39,6 +39,8 @@ const IsoTimestamp = z.iso.datetime();
 const Confidence = z.number().min(0).max(1);
 
 export const EvidenceSchema = z.strictObject({
+  /** Referenced by Hypothesis.supportingEvidenceIds. */
+  id: z.string(),
   source: z.string(),
   tool: z.string(),
   /** Redacted excerpt only; the LLM never sees raw secrets. */

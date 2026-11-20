@@ -16,3 +16,6 @@ __pycache__/
 !.env.example
 secrets/
 .DS_Store
+
+# local exports, never commit
+Personal-projects.csv

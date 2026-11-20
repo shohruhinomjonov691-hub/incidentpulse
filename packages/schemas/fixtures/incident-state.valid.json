@@ -10,6 +10,7 @@
   "category": "tls",
   "evidence": [
     {
+      "id": "e1",
       "source": "mcp-infra",
       "tool": "tls_inspect",
       "excerpt": "notAfter=2026-11-18T00:00:00Z chainValid=false",
@@ -21,9 +22,7 @@
     {
       "id": "h1",
       "cause": "TLS certificate expired on 2026-11-18",
-      "supportingEvidenceIds": [
-        "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
-      ],
+      "supportingEvidenceIds": ["e1"],
       "confidence": 0.91
     }
   ],
