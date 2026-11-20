@@ -46,12 +46,12 @@ export function createRemediationProposer(options: {
     const candidates = options.registry.candidates(state.project).filter((book) => {
       if (book.category !== state.category) return false;
       if (book.id === "certbot_renew") return expired;
-      // A mismatched certificate alone is insufficient to infer a missing vhost or certificate.
       if (book.id === "certbot_nginx_issue") {
+        // A TLS mismatch can be the default vhost. The runner checks certificate and vhost inventory before a proposal is shown.
         return (
           !expired &&
           evidence.some((item) =>
-            /NO_PEER_CERTIFICATE|no peer certificate|no virtual host|no certificate configured/i.test(
+            /hostnameMatch=false|ALTNAME_INVALID|NO_PEER_CERTIFICATE|no peer certificate|no virtual host|no certificate configured/i.test(
               item.excerpt,
             ),
           )

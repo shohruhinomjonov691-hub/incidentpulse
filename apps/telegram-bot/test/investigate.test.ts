@@ -4,11 +4,14 @@ import { createInvestigationBot } from "../src/index.ts";
 function mockBot() {
   const enqueue = vi.fn(async () => {});
   const reply = vi.fn();
+  const decide = vi.fn(async () => ({ answer: "OK" }));
+  const setStopped = vi.fn(async () => {});
   const bot = createInvestigationBot({
     token: "123:fake-token",
     chatId: "-100",
     allowedUsers: new Set([42]),
     enqueue,
+    controls: { callback: decide, setStopped, status: async () => "status" },
     redact: (text) => text,
     onError: (error) => {
       throw new Error(error);
@@ -30,23 +33,39 @@ function mockBot() {
     can_manage_bots: false,
   };
   bot.api.config.use(async (_previous, method) => {
-    if (method !== "sendMessage") throw new Error(`Unexpected Telegram API method: ${method}`);
-    reply();
+    if (method === "sendMessage") reply();
+    else if (method !== "answerCallbackQuery")
+      throw new Error(`Unexpected Telegram API method: ${method}`);
     return { ok: true, result: {} } as never;
   });
-  const message = (id: number, chatId: number, argument: string) =>
+  const message = (id: number, chatId: number, argument: string, command = "/investigate") =>
     bot.handleUpdate({
       update_id: 900,
       message: {
         message_id: 1,
         date: 0,
-        text: `/investigate ${argument}`,
-        entities: [{ offset: 0, length: 12, type: "bot_command" }],
+        text: `${command} ${argument}`.trim(),
+        entities: [{ offset: 0, length: command.length, type: "bot_command" }],
         chat: { id: chatId, type: "supergroup", title: "Test" },
         from: { id, is_bot: false, first_name: "Tester" },
       },
     });
-  return { message, enqueue, reply };
+  const callback = (id: number, chatId: number) =>
+    bot.handleUpdate({
+      update_id: 901,
+      callback_query: {
+        id: "test-callback",
+        chat_instance: "chat",
+        data: "signed-approval",
+        from: { id, is_bot: false, first_name: "Tester" },
+        message: {
+          message_id: 1,
+          date: 0,
+          chat: { id: chatId, type: "supergroup", title: "Test" },
+        },
+      },
+    });
+  return { message, enqueue, reply, callback, decide, setStopped };
 }
 
 describe("/investigate", () => {
@@ -65,4 +84,20 @@ describe("/investigate", () => {
     expect(f.enqueue).toHaveBeenCalledExactlyOnceWith("kervan", 900);
     expect(f.reply).toHaveBeenCalledTimes(2);
   });
+});
+
+test("callback decisions and kill-switch commands require both the allowed sender and chat", async () => {
+  const f = mockBot();
+  await f.callback(41, -100);
+  await f.callback(42, -101);
+  await f.message(41, -100, "", "/stop");
+  await f.message(42, -101, "", "/stop");
+  expect(f.decide).not.toHaveBeenCalled();
+  expect(f.setStopped).not.toHaveBeenCalled();
+
+  await f.callback(42, -100);
+  expect(f.decide).toHaveBeenCalledExactlyOnceWith("signed-approval", 42);
+  await f.message(42, -100, "", "/stop");
+  await f.message(42, -100, "", "/resume");
+  expect(f.setStopped.mock.calls).toEqual([[true], [false]]);
 });

@@ -1,12 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { createApprovalStore, loadRunbookRegistry } from "@incidentpulse/mcp-actions";
+import { KNOWN_PRICING, type ModelPricing } from "@incidentpulse/config";
+import { createApprovalStore, dryRun, loadRunbookRegistry } from "@incidentpulse/mcp-actions";
 import { Redis } from "ioredis";
 import { Pool } from "pg";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createActionControls, createActionFlow } from "../src/action-flow.ts";
 import { buildIncidentGraph, toIncidentState } from "../src/graph.ts";
+import { createRemediationProposer } from "../src/remediation-proposer.ts";
 import { resumeIncident, runIncident } from "../src/run.ts";
 import { job, makeMocks, NOW } from "./helpers.ts";
+import { finalText, ScriptedModel } from "./scripted-model.ts";
 
 test("low debate confidence sends missing facts back to specialists and verifies again", async () => {
   const m = makeMocks({ specialists: { code: { available: false } } });
@@ -62,6 +65,40 @@ test("debate outage leaves a trace and continues without a verdict", async () =>
   expect(state.trace.some((e) => e.event === "debate_unavailable")).toBe(true);
   expect(state.verdict).toBeNull();
   expect(state.reportSent).toBeDefined();
+});
+
+test("TLS mismatch can propose medium-risk issuance only after the inventory dry run passes", async () => {
+  const m = makeMocks();
+  const { state } = await runIncident(buildIncidentGraph(m.deps), job());
+  const registry = loadRunbookRegistry({
+    kervan: { domains: ["kervan.uz"], webroot: "/srv/www/acme" },
+  });
+  const proposer = createRemediationProposer({
+    registry,
+    redact: m.deps.redact,
+    pricing: KNOWN_PRICING["gpt-5.4-mini"] as ModelPricing,
+    model: new ScriptedModel([
+      finalText(
+        JSON.stringify({
+          runbookId: "certbot_nginx_issue",
+          params: [{ name: "domain", value: "kervan.uz" }],
+        }),
+      ),
+    ]),
+  });
+  const book = (await proposer(state)).book;
+  if (!book) throw new Error("Missing issuance proposal");
+  const alreadyConfigured = vi.fn(async ({ program }: { program: string }) =>
+    program === "certbot" ? "Domains: kervan.uz" : "server_name kervan.uz;",
+  );
+  expect((await dryRun(book, alreadyConfigured, m.deps.redact)).ok).toBe(false);
+  expect(alreadyConfigured).toHaveBeenCalledTimes(2);
+
+  const missing = vi.fn(async () => "");
+  expect((await dryRun(book, missing, m.deps.redact)).ok).toBe(true);
+  expect(missing.mock.calls[2]).toMatchObject([
+    { program: "certbot", args: expect.arrayContaining(["certonly", "--dry-run", "kervan.uz"]) },
+  ]);
 });
 
 const databaseUrl = process.env.IT_DATABASE_URL;
