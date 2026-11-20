@@ -13,6 +13,7 @@
     "generate": "turbo run generate",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "sandbox:eval": "pnpm --filter @incidentpulse/orchestrator sandbox:eval",
     "incident:simulate": "node --env-file-if-exists=.env apps/intake/scripts/simulate.ts"
   },
   "devDependencies": {

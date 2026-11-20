@@ -2,7 +2,6 @@ import { createRedactor } from "@incidentpulse/redact";
 import type { Category, Evidence, IncidentJob } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import { MemorySaver } from "@langchain/langgraph";
-import { createMemoryDailyBudget } from "../src/daily-budget.ts";
 import { buildIncidentGraph, type GraphDeps } from "../src/graph.ts";
 import {
   SPECIALISTS,
@@ -15,6 +14,7 @@ import {
   type Triage,
   type TriageDecision,
 } from "../src/types.ts";
+import { createMemoryWeeklyBudget } from "../src/weekly-budget.ts";
 
 export const NOW = new Date("2026-11-21T04:00:10.000Z"); // 13:00 on Nov 21 in Seoul
 
@@ -224,8 +224,8 @@ export function makeMocks(
     specialists?: Partial<Record<SpecialistName, Parameters<typeof fakeSpecialist>[1]>>;
     synth?: Parameters<typeof fakeSynth>[0];
     budgetUsd?: number;
-    dailyBudgetUsd?: number;
-    dailySpentUsd?: number;
+    weeklyBudgetUsd?: number;
+    weeklySpentUsd?: number;
     notifierFails?: boolean;
   } = {},
 ): Mocks {
@@ -253,8 +253,8 @@ export function makeMocks(
     notifier,
     redact: createRedactor(),
     budgetUsd: overrides.budgetUsd ?? 0.5,
-    dailyBudgetUsd: overrides.dailyBudgetUsd ?? 3,
-    dailyBudget: createMemoryDailyBudget(overrides.dailySpentUsd ?? 0, NOW),
+    weeklyBudgetUsd: overrides.weeklyBudgetUsd ?? 0.5,
+    weeklyBudget: createMemoryWeeklyBudget(overrides.weeklySpentUsd ?? 0, NOW),
     checkpointer: new MemorySaver(),
     now: () => NOW,
   };

@@ -1,5 +1,6 @@
 import type { IncidentJob } from "@incidentpulse/schemas";
 import type { GraphState, IncidentGraph } from "./graph.ts";
+import type { PrimaryEvidence } from "./primary-evidence.ts";
 
 export interface RunOutcome {
   state: GraphState;
@@ -13,7 +14,11 @@ export interface RunOutcome {
  *  - finished checkpoint  -> returns it without re-running (no duplicate Telegram message);
  *  - unfinished checkpoint -> resumes from the last completed node.
  */
-export async function runIncident(graph: IncidentGraph, job: IncidentJob): Promise<RunOutcome> {
+export async function runIncident(
+  graph: IncidentGraph,
+  job: IncidentJob,
+  primary?: PrimaryEvidence,
+): Promise<RunOutcome> {
   const config = { configurable: { thread_id: job.incidentId } };
   const snapshot = await graph.getState(config);
   const hasCheckpoint = Object.keys(snapshot.values ?? {}).length > 0;
@@ -25,7 +30,12 @@ export async function runIncident(graph: IncidentGraph, job: IncidentJob): Promi
     return { state: (await graph.invoke(null, config)) as GraphState, mode: "resumed" };
   }
   const state = await graph.invoke(
-    { incidentId: job.incidentId, project: job.project, signal: job.signal },
+    {
+      incidentId: job.incidentId,
+      project: job.project,
+      signal: job.signal,
+      ...(primary ? { primary } : {}),
+    },
     config,
   );
   return { state: state as GraphState, mode: "completed" };

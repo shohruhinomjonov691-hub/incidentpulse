@@ -55,7 +55,7 @@ no bug fixes, no security fixes, no support, and points to Microsoft Agent Frame
 
 ## Budget day
 
-The daily budget's "day" is the calendar day in `BUDGET_TIMEZONE` (default `Asia/Seoul`, UTC+9, no DST), changed from UTC on 2026-11-21 at the owner's request.
+The Phase 2 cost update uses a weekly budget with Monday 00:00 rollover in `Asia/Seoul` (UTC+9, no DST).
 
 ## Node 24 vs 26
 

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { type Category, type ProjectId, ProjectIdSchema, SignalSchema } from "./incident-state.ts";
+import {
+  type Category,
+  CategorySchema,
+  type ProjectId,
+  ProjectIdSchema,
+  SignalSchema,
+} from "./incident-state.ts";
 
 /** BullMQ queue between apps/intake (producer) and apps/orchestrator (worker). */
 export const INCIDENT_QUEUE_NAME = "incident-intake";
@@ -24,6 +30,7 @@ export const MonitorWebhookSchema = z.strictObject({
   level: z.string().min(1).max(50),
   summary: z.string().max(1000),
   at: SignalSchema.shape.at,
+  category: CategorySchema.optional(),
 });
 export type MonitorWebhook = z.infer<typeof MonitorWebhookSchema>;
 
@@ -33,6 +40,7 @@ export const IncidentJobSchema = z.strictObject({
   signal: SignalSchema,
   dedupKey: z.string().min(1),
   receivedAt: z.iso.datetime(),
+  category: CategorySchema.optional(),
 });
 export type IncidentJob = z.infer<typeof IncidentJobSchema>;
 
@@ -44,3 +52,11 @@ export function dedupKey(
 ): string {
   return `${project}:${check}:${category}`;
 }
+
+// Shared queue policy for monitor, scheduled and manual investigations.
+export const INCIDENT_JOB_OPTIONS = {
+  attempts: 2,
+  backoff: { type: "exponential", delay: 5000 },
+  removeOnComplete: { age: 86_400, count: 1000 },
+  removeOnFail: { age: 7 * 86_400 },
+} as const;

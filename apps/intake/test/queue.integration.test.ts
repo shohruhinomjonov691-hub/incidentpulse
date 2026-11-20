@@ -18,7 +18,7 @@ const job = (id: string): IncidentJob => ({
 });
 
 describe.skipIf(!url)("BullMQ producer (real Redis)", () => {
-  const queue = createBullQueue({ redisUrl: url as string, dedupTtlMs: 5000, queueName });
+  const queue = createBullQueue({ redisUrl: url as string, queueName });
 
   afterAll(async () => {
     await queue.close();
@@ -29,7 +29,7 @@ describe.skipIf(!url)("BullMQ producer (real Redis)", () => {
     conn.disconnect();
   });
 
-  test("dedups the same project+check and returns the original incident id", async () => {
+  test("dedups the same observation and returns the original incident id", async () => {
     const first = await queue.enqueue(job("inc-a"));
     const second = await queue.enqueue(job("inc-b"));
     expect(first).toEqual({ incidentId: "inc-a", deduplicated: false });

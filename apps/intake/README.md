@@ -4,7 +4,7 @@ Fastify webhook receiver (SPEC §3, §10, §12). Verifies the HMAC + timestamp, 
 
 ## Webhook contract (CodeTrail → intake)
 
-`POST /webhook/monitor`, `Content-Type: application/json`, body `{project, check, level, summary, at}` (≤ 16 KiB):
+`POST /webhook/monitor`, `Content-Type: application/json`, body `{project, check, level, summary, at, category?}` (≤ 16 KiB):
 
 ```
 X-IncidentPulse-Timestamp: <unix seconds>
@@ -14,8 +14,8 @@ X-IncidentPulse-Signature: sha256=<hex HMAC-SHA256(WEBHOOK_HMAC_SECRET, "<timest
 | Response | Meaning |
 |---|---|
 | `202 {status:"queued", incidentId}` | accepted |
-| `202 {status:"duplicate", incidentId}` | same `project:check` already queued inside `DEDUP_TTL_SECONDS` (default 600) |
-| `202 {status:"ignored"}` | `level` is not `down` (recovery signals are ignored until Phase 4) |
+| `202 {status:"duplicate", incidentId}` | same observation already queued in the past 10 minutes |
+| `202 {status:"ignored"}` | `level` is neither `down` nor `ok` |
 | `401 {error:"unauthorized"}` | missing/invalid signature, or timestamp more than 5 minutes away from now (past or future) |
 | `400` | invalid JSON / payload (field names only, never values) |
 

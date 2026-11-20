@@ -165,7 +165,7 @@ describe("one specialist failing does not sink the incident", () => {
 
 describe("per-incident budget ($0.50, SPEC §8)", () => {
   test("triage alone spending the budget escalates before any specialist runs", async () => {
-    const m = makeMocks({ triage: { costUsd: 0.6 } });
+    const m = makeMocks({ weeklyBudgetUsd: 1, triage: { costUsd: 0.6 } });
     const { state } = await runIncident(graphFor(m), job());
     expect(m.specialists.infra.calls).toBe(0);
     expect(state.overBudget).toBe("incident");
@@ -175,7 +175,10 @@ describe("per-incident budget ($0.50, SPEC §8)", () => {
   });
 
   test("specialists spending the budget skip synthesize and escalate with the evidence gathered", async () => {
-    const m = makeMocks({ specialists: { infra: { costUsd: 0.3 }, logs: { costUsd: 0.3 } } });
+    const m = makeMocks({
+      weeklyBudgetUsd: 1,
+      specialists: { infra: { costUsd: 0.3 }, logs: { costUsd: 0.3 } },
+    });
     const { state } = await runIncident(graphFor(m), job());
     expect(m.synth.calls).toBe(0);
     expect(state.escalation?.reason).toBe("incident_budget");
@@ -184,13 +187,14 @@ describe("per-incident budget ($0.50, SPEC §8)", () => {
   });
 
   test("spending exactly the budget counts as exceeded (hard stop)", async () => {
-    const m = makeMocks({ triage: { costUsd: 0.5 } });
+    const m = makeMocks({ weeklyBudgetUsd: 1, triage: { costUsd: 0.5 } });
     await runIncident(graphFor(m), job());
     expect(m.specialists.infra.calls).toBe(0);
   });
 
   test("synthesize pushing the total over budget still reports, with a budget warning", async () => {
     const m = makeMocks({
+      weeklyBudgetUsd: 1,
       specialists: { infra: { costUsd: 0.25 }, logs: { costUsd: 0.1 } },
       synth: { costUsd: 0.2 },
     });
@@ -202,57 +206,57 @@ describe("per-incident budget ($0.50, SPEC §8)", () => {
   });
 });
 
-describe("daily budget ($3 per Seoul day, SPEC §8)", () => {
-  test("every LLM call is added to the daily counter", async () => {
+describe("weekly budget ($0.50 per Seoul week, SPEC §8)", () => {
+  test("every LLM call is added to the weekly counter", async () => {
     const m = makeMocks();
     const { state } = await runIncident(graphFor(m), job());
-    expect(await m.deps.dailyBudget.spentUsd(NOW)).toBeCloseTo(0.011, 6);
-    expect(state.dailySpentUsd).toBeCloseTo(0.011, 6);
+    expect(await m.deps.weeklyBudget.spentUsd(NOW)).toBeCloseTo(0.011, 6);
+    expect(state.weeklySpentUsd).toBeCloseTo(0.011, 6);
   });
 
-  test("when today's budget is already spent: NO LLM call, escalate, one short Telegram warning", async () => {
-    const m = makeMocks({ dailySpentUsd: 3.02 });
+  test("when this week's budget is already spent: NO LLM call, escalate, one short Telegram warning", async () => {
+    const m = makeMocks({ weeklySpentUsd: 0.52 });
     const { state } = await runIncident(graphFor(m), job({ incidentId: "inc-77" }));
 
     expect(m.triage.calls + m.specialists.infra.calls + m.synth.calls).toBe(0);
     expect(state.costUsd).toBe(0);
-    expect(state.escalation).toMatchObject({ reason: "daily_budget", messageId: 1 });
+    expect(state.escalation).toMatchObject({ reason: "weekly_budget", messageId: 1 });
     expect(m.notifier.sent).toEqual([
       "🚨 Kervan — incident #inc-77: inson ko'rigi kerak\n" +
-        "Sabab: kunlik byudjet ($3.00) tugadi (bugun $3.02) — avtomatik tergov to'xtatildi.",
+        "Sabab: haftalik byudjet ($0.50) tugadi (bu hafta $0.52) — avtomatik tergov to'xtatildi.",
     ]);
-    expect(await m.deps.dailyBudget.spentUsd(NOW)).toBeCloseTo(3.02, 6);
+    expect(await m.deps.weeklyBudget.spentUsd(NOW)).toBeCloseTo(0.52, 6);
   });
 
   test("small amounts keep 4 decimals in the escalation text", async () => {
-    const m = makeMocks({ dailySpentUsd: 0.0034, dailyBudgetUsd: 0.003 });
+    const m = makeMocks({ weeklySpentUsd: 0.0034, weeklyBudgetUsd: 0.003 });
     await runIncident(graphFor(m), job());
-    expect(m.notifier.sent[0]).toContain("kunlik byudjet ($0.0030) tugadi (bugun $0.0034)");
+    expect(m.notifier.sent[0]).toContain("haftalik byudjet ($0.0030) tugadi (bu hafta $0.0034)");
   });
 
   test("exactly at the limit counts as spent; just under it still runs", async () => {
-    const at = makeMocks({ dailySpentUsd: 3 });
+    const at = makeMocks({ weeklySpentUsd: 0.5 });
     await runIncident(graphFor(at), job());
     expect(at.triage.calls).toBe(0);
-    const under = makeMocks({ dailySpentUsd: 2.99 });
+    const under = makeMocks({ weeklySpentUsd: 0.48 });
     const { state } = await runIncident(graphFor(under), job());
     expect(state.reportSent).toBeDefined();
   });
 
-  test("the day running out during the specialists skips synthesize and escalates", async () => {
+  test("the week running out during the specialists skips synthesize and escalates", async () => {
     const m = makeMocks({
-      dailySpentUsd: 2.99,
+      weeklySpentUsd: 0.49,
       specialists: { infra: { costUsd: 0.006 }, logs: { costUsd: 0.006 } },
     });
     const { state } = await runIncident(graphFor(m), job());
     expect(m.synth.calls).toBe(0);
-    expect(state.escalation?.reason).toBe("daily_budget");
+    expect(state.escalation?.reason).toBe("weekly_budget");
     expect(m.notifier.sent[0]).toContain("Dalil: ");
   });
 
   test("spend accumulates across incidents until the limit, then escalation takes over", async () => {
     const m = makeMocks({
-      dailyBudgetUsd: 0.03,
+      weeklyBudgetUsd: 0.03,
       triage: { costUsd: 0.005 },
       specialists: { infra: { costUsd: 0.004 }, logs: { costUsd: 0.004 } },
       synth: { costUsd: 0.002 },
@@ -261,25 +265,25 @@ describe("daily budget ($3 per Seoul day, SPEC §8)", () => {
     const results = [];
     for (let i = 1; i <= 4; i++)
       results.push(await runIncident(graph, job({ incidentId: `inc-${i}` })));
-    // each full incident costs 0.015: #1 → 0.015, #2 → 0.030 >= limit after synthesize (report + warning)
+    // each full incident costs 0.015: #1 → 0.015, #2 → 0.030 >= limit after synthesize (escalation)
     expect(results[0]?.state.reportSent).toBeDefined();
-    expect(results[1]?.state.reportSent).toBeDefined();
-    expect(results[1]?.state.overBudget).toBe("daily");
-    expect(results[2]?.state.escalation?.reason).toBe("daily_budget");
-    expect(results[3]?.state.escalation?.reason).toBe("daily_budget");
+    expect(results[1]?.state.escalation?.reason).toBe("weekly_budget");
+    expect(results[1]?.state.overBudget).toBe("weekly");
+    expect(results[2]?.state.escalation?.reason).toBe("weekly_budget");
+    expect(results[3]?.state.escalation?.reason).toBe("weekly_budget");
     expect(m.triage.calls).toBe(2); // #3 and #4 never reached triage
   });
 
-  test("a new Seoul day starts from zero (00:00:01 on Nov 22 in Seoul)", async () => {
-    const m = makeMocks({ dailySpentUsd: 3.5 });
-    const nextDay = new Date("2026-11-21T15:00:01.000Z");
+  test("a new Seoul week starts from zero (Monday at 00:00:01)", async () => {
+    const m = makeMocks({ weeklySpentUsd: 3.5 });
+    const nextDay = new Date("2026-11-22T15:00:01.000Z");
     m.deps.now = () => nextDay;
     const { state } = await runIncident(graphFor(m), job());
     expect(state.reportSent).toBeDefined();
   });
 
   test("an escalated incident is not escalated twice when its job is retried", async () => {
-    const m = makeMocks({ dailySpentUsd: 5 });
+    const m = makeMocks({ weeklySpentUsd: 5 });
     const graph = graphFor(m);
     await runIncident(graph, job());
     const again = await runIncident(graph, job());
@@ -288,7 +292,7 @@ describe("daily budget ($3 per Seoul day, SPEC §8)", () => {
   });
 
   test("if the warning cannot be delivered the job fails (so it is retried), not silently dropped", async () => {
-    const m = makeMocks({ dailySpentUsd: 5, notifierFails: true });
+    const m = makeMocks({ weeklySpentUsd: 5, notifierFails: true });
     await expect(runIncident(graphFor(m), job())).rejects.toThrow("telegram down");
   });
 });

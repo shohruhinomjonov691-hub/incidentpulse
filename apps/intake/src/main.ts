@@ -3,7 +3,7 @@ import { createBullQueue } from "./queue.ts";
 import { buildServer } from "./server.ts";
 
 const config = loadIntakeConfig(process.env);
-const queue = createBullQueue({ redisUrl: config.redisUrl, dedupTtlMs: config.dedupTtlMs });
+const queue = createBullQueue({ redisUrl: config.redisUrl });
 const app = buildServer({ secret: config.hmacSecret, queue, logger: true });
 
 const shutdown = async () => {

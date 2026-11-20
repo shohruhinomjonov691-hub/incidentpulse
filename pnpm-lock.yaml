@@ -328,6 +328,9 @@ importers:
       '@incidentpulse/redact':
         specifier: workspace:*
         version: link:../../packages/redact
+      '@incidentpulse/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
       grammy:
         specifier: catalog:frameworks
         version: 1.46.0

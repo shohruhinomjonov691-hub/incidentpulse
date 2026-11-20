@@ -8,11 +8,6 @@ export {
 export { createSynthesizer, normalizeSynthesis } from "./agents/synthesizer.ts";
 export { createTriage, HandoffInputSchema } from "./agents/triage.ts";
 export { costOf, sumUsage } from "./cost.ts";
-export {
-  createMemoryDailyBudget,
-  createRedisDailyBudget,
-  type DailyBudget,
-} from "./daily-budget.ts";
 export { buildEvidence, extractToolOutputText } from "./evidence.ts";
 export {
   buildIncidentGraph,
@@ -33,4 +28,9 @@ export {
 export { formatEscalation, formatFailureNotice, formatReport, usd } from "./report.ts";
 export { runIncident } from "./run.ts";
 export * from "./types.ts";
+export {
+  createMemoryWeeklyBudget,
+  createRedisWeeklyBudget,
+  type WeeklyBudget,
+} from "./weekly-budget.ts";
 export { createIncidentWorker } from "./worker.ts";

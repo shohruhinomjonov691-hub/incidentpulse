@@ -1,5 +1,6 @@
 import type { IncidentJob } from "@incidentpulse/schemas";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { observationKey } from "../src/queue.ts";
 import { buildServer, type IncidentQueue } from "../src/server.ts";
 import { SIGNATURE_HEADER, sign, TIMESTAMP_HEADER } from "../src/signature.ts";
 
@@ -32,9 +33,9 @@ beforeEach(() => {
   // Fake queue with the same dedup semantics as the BullMQ adapter.
   const queue: IncidentQueue = {
     async enqueue(job) {
-      const existing = seenKeys.get(job.dedupKey);
+      const existing = seenKeys.get(observationKey(job));
       if (existing) return { incidentId: existing, deduplicated: true };
-      seenKeys.set(job.dedupKey, job.incidentId);
+      seenKeys.set(observationKey(job), job.incidentId);
       jobs.push(job);
       return { incidentId: job.incidentId, deduplicated: false };
     },
@@ -70,7 +71,7 @@ describe("POST /webhook/monitor", () => {
     expect(jobs[0]?.signal.level).toBe("down");
   });
 
-  test("the same project+check twice is deduplicated and returns the first incident id", async () => {
+  test("the same signed observation twice is deduplicated and returns the first incident id", async () => {
     const raw = JSON.stringify(validBody);
     await post(raw, signedHeaders(raw));
     const second = await post(raw, signedHeaders(raw));
@@ -90,12 +91,18 @@ describe("POST /webhook/monitor", () => {
     expect(jobs).toHaveLength(3);
   });
 
-  test("OK (recovery) signals are acknowledged but not queued", async () => {
-    const raw = JSON.stringify({ ...validBody, level: "ok" });
-    const res = await post(raw, signedHeaders(raw));
-    expect(res.statusCode).toBe(202);
-    expect(res.json()).toMatchObject({ status: "ignored" });
-    expect(jobs).toHaveLength(0);
+  test("Down → OK → Down and a new category are distinct observations", async () => {
+    for (const body of [
+      validBody,
+      { ...validBody, level: "OK", at: "2026-11-21T03:59:51.000Z" },
+      { ...validBody, at: "2026-11-21T03:59:52.000Z" },
+      { ...validBody, at: "2026-11-21T03:59:52.000Z", category: "tls" },
+    ]) {
+      const raw = JSON.stringify(body);
+      expect((await post(raw, signedHeaders(raw))).json().status).toBe("queued");
+    }
+    expect(jobs.map((job) => job.signal.level)).toEqual(["down", "ok", "down", "down"]);
+    expect(jobs.at(-1)?.category).toBe("tls");
   });
 
   test.each([

@@ -65,16 +65,17 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       });
     }
 
-    const { project, ...signal } = parsed.data;
-    // CodeTrail also reports Down→OK. Auto-close arrives with verify_recovery (Phase 4).
-    if (signal.level.toLowerCase() !== "down") {
-      return reply.code(202).send({ status: "ignored", reason: "level_not_down" });
+    const { project, category, ...signal } = parsed.data;
+    const level = signal.level.trim().toLowerCase();
+    if (level !== "down" && level !== "ok") {
+      return reply.code(202).send({ status: "ignored", reason: "level_not_down_or_ok" });
     }
 
     const queued = await options.queue.enqueue({
       incidentId: newIncidentId(),
       project,
-      signal: { ...signal, level: signal.level.toLowerCase() },
+      signal: { ...signal, level },
+      ...(category ? { category } : {}),
       dedupKey: dedupKey(project, signal.check),
       receivedAt: new Date(now()).toISOString(),
     });

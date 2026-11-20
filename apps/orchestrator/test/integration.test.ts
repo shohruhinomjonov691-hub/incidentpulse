@@ -5,6 +5,7 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { buildIncidentGraph } from "../src/graph.ts";
+import { createInvestigationPolicy } from "../src/investigation-policy.ts";
 import { createLogger } from "../src/log.ts";
 import { runIncident } from "../src/run.ts";
 import { createIncidentWorker } from "../src/worker.ts";
@@ -79,9 +80,32 @@ describe.skipIf(!dbUrl || !redisUrl)(
       const m = makeMocks();
       m.deps.checkpointer = saver;
       const lines: string[] = [];
-      const worker = createIncidentWorker({
-        redisUrl: redisUrl as string,
+      const redis = new Redis(redisUrl as string);
+      const prefix = `it:${queueName}`;
+      cleanup.push(async () => {
+        const keys = await redis.keys(`${prefix}:*`);
+        if (keys.length) await redis.del(...keys);
+        redis.disconnect();
+      });
+      const investigations = createInvestigationPolicy({
+        redis,
+        mode: "on_change",
+        prefix,
         graph: buildIncidentGraph(m.deps),
+        notifier: m.notifier,
+        redact: m.deps.redact,
+        probe: async () => ({
+          category: "tls",
+          hash: "initial-cert",
+          quickEvidence: [],
+          unsafeAttempts: 0,
+          injectionFlags: 0,
+        }),
+      });
+      const worker = await createIncidentWorker({
+        redisUrl: redisUrl as string,
+        investigations,
+        investigateMode: "on_change",
         notifier: m.notifier,
         redact: m.deps.redact,
         log: createLogger(
@@ -94,7 +118,6 @@ describe.skipIf(!dbUrl || !redisUrl)(
 
       const queue = createBullQueue({
         redisUrl: redisUrl as string,
-        dedupTtlMs: 60_000,
         queueName,
       });
       cleanup.push(() => queue.close());

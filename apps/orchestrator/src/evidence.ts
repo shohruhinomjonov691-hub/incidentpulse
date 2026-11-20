@@ -174,3 +174,39 @@ export function buildEvidence(args: {
     hash: sha256(hashSource),
   };
 }
+
+/** Keep a single citation for the same diagnostic fact even when probe timing differs. */
+export function evidenceForModel(items: readonly Evidence[]): Evidence[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const fact = item.excerpt
+      .replace(/ latency=\d+(?:\.\d+)?ms\b/, "")
+      .replace(/(notAfter=\d{4}-\d{2}-\d{2}) \(-?\d+d\)/, "$1");
+    const key = JSON.stringify([item.tool, fact]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function logSignatures(lines: string[]): string[] {
+  return [
+    ...new Set(
+      lines
+        .filter((line) => !line.includes(REMOVED_MARK) && INTERESTING.test(line))
+        .map((line) =>
+          oneLine(
+            line
+              .replace(/\b\d{4}[-/]\d\d[-/]\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?Z?/g, "")
+              .replace(/\b\d+#\d+:\s*\*\d+\s*/g, "")
+              .replace(/, client: [^,]+/g, "")
+              .replace(/\b(?:request[_ -]?id|trace[_ -]?id)[=: ]+\S+/gi, ""),
+            220,
+          ),
+        )
+        .filter(Boolean),
+    ),
+  ]
+    .slice(-4)
+    .sort();
+}

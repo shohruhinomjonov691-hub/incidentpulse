@@ -36,22 +36,25 @@ const EnvSchema = z.object({
   INTAKE_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   /** Hard stop per incident (SPEC §8). */
   INCIDENT_BUDGET_USD: z.coerce.number().positive().default(0.5),
-  /** Hard stop per calendar day across all incidents (SPEC §8). */
-  DAILY_BUDGET_USD: z.coerce.number().positive().default(3),
-  /** IANA time zone that defines "a day" for the daily budget. */
-  BUDGET_TIMEZONE: z
+  WEEKLY_BUDGET_USD: z.coerce.number().positive().default(0.5),
+  INVESTIGATE_MODE: z.enum(["on_change", "weekly"]).default("on_change"),
+  TELEGRAM_ALLOWED_USER_IDS: z
     .string()
-    .default("Asia/Seoul")
-    .refine((tz) => {
-      try {
-        new Intl.DateTimeFormat("en-CA", { timeZone: tz });
-        return true;
-      } catch {
-        return false;
+    .default("")
+    .transform((raw, ctx) => {
+      const ids = raw
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+      if (ids.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) {
+        ctx.addIssue({
+          code: "custom",
+          message: "must contain comma-separated positive Telegram user IDs",
+        });
+        return z.NEVER;
       }
-    }, "must be a valid IANA time zone"),
-  /** Same project+check inside this window is one incident. */
-  DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+      return new Set(ids.map(Number));
+    }),
   /** Optional JSON overriding PROJECT_DOMAINS, e.g. {"gotrip":["gotrip.uz"]}. */
   PROJECT_DOMAINS_JSON: z.string().optional(),
   /** Container name prefixes docker_ps/docker_logs may see per project, e.g. {"gotrip":["ipsb-a-"]}. */
@@ -178,14 +181,12 @@ export function loadIntakeConfig(source: NodeJS.ProcessEnv = process.env) {
     "REDIS_URL",
     "INTAKE_HOST",
     "INTAKE_PORT",
-    "DEDUP_TTL_SECONDS",
   ] as const);
   return {
     hmacSecret: c.WEBHOOK_HMAC_SECRET,
     redisUrl: c.REDIS_URL,
     host: c.INTAKE_HOST,
     port: c.INTAKE_PORT,
-    dedupTtlMs: c.DEDUP_TTL_SECONDS * 1000,
   };
 }
 
@@ -206,8 +207,9 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "DATABASE_URL",
     "REDIS_URL",
     "INCIDENT_BUDGET_USD",
-    "DAILY_BUDGET_USD",
-    "BUDGET_TIMEZONE",
+    "WEEKLY_BUDGET_USD",
+    "INVESTIGATE_MODE",
+    "TELEGRAM_ALLOWED_USER_IDS",
     "PROJECT_DOMAINS_JSON",
     "PROJECT_CONTAINERS_JSON",
     "CODETRAIL_BASE_URL",
@@ -232,8 +234,9 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     databaseUrl: c.DATABASE_URL,
     redisUrl: c.REDIS_URL,
     budgetUsd: c.INCIDENT_BUDGET_USD,
-    dailyBudgetUsd: c.DAILY_BUDGET_USD,
-    budgetTimeZone: c.BUDGET_TIMEZONE,
+    weeklyBudgetUsd: c.WEEKLY_BUDGET_USD,
+    investigateMode: c.INVESTIGATE_MODE,
+    telegramAllowedUserIds: c.TELEGRAM_ALLOWED_USER_IDS,
     projectDomains: resolveProjectDomains(c.PROJECT_DOMAINS_JSON),
     projectContainers: resolveProjectContainers(c.PROJECT_CONTAINERS_JSON),
     codetrail: {

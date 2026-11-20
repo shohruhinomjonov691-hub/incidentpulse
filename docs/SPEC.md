@@ -205,8 +205,12 @@ Web (`apps/web`): the same Approve/Reject, behind the CodeTrail monitor key / se
 ## 8. Observability and cost
 
 - Langfuse trace per incident; spans per node, agent, tool. Tags: project, category, iteration.
-- Token and $ cost per span; `state.costUsd` updated after each LLM call.
-- Budgets: **$0.50 per incident**, **$3 per day**. Exceeding the budget sends the incident to `escalate`.
+- Estimate model spend from token usage. Keep `gpt-5.4-mini`. Send compact tool digests and one citation per distinct fact to the model. Reuse quick probes across triage and specialists. Cap output tokens per request at 400 for triage, 480 for specialists, and 900 for synthesis.
+- `INVESTIGATE_MODE=on_change` (default) investigates the first Down observation, a new category, or changed primary evidence. Signed OK resets the active check. The worker also probes active Down checks daily at 09:00 Asia/Seoul so edge-only monitors can detect changed evidence and get reminders.
+- `INVESTIGATE_MODE=weekly` keeps the latest observation per project and check in Redis. It evaluates active Down checks on Sunday at 09:00 Asia/Seoul. An OK received before processing removes the check from the investigation.
+- Before calling the LLM, use allowlisted read-only probes and the signed monitor signal to fingerprint `project + category + hash(primary evidence)`. The monitor may include an optional `category` hint. Ignore volatile timings and known log noise. Cache successful conclusions for seven days. A matching fingerprint reuses the conclusion, including after an OK→Down, and sends a short Telegram reminder at most once per project per Seoul day. Expiration alone leaves an unchanged Down idle until a transition or changed evidence.
+- `/investigate <project>` in the configured Telegram chat bypasses the cache and schedule for users in `TELEGRAM_ALLOWED_USER_IDS`. It shares the automatic investigation budget.
+- Budgets: **$0.50 per incident** (`INCIDENT_BUDGET_USD`) and **$0.50 per Seoul calendar week** (`WEEKLY_BUDGET_USD`, Monday 00:00 reset). Book weekly spend after each provider response and skip subsequent LLM calls once exhausted. A request already admitted can cross the threshold. Investigations blocked by the limit escalate with available evidence.
 - OpenTelemetry for the non-LLM services (intake, MCP servers).
 - Langfuse: start with Langfuse Cloud (free tier); self-hosting needs Postgres + ClickHouse + Redis, so check VPS RAM before doing that.
 
@@ -234,7 +238,7 @@ Web (`apps/web`): the same Approve/Reject, behind the CodeTrail monitor key / se
 | 14 | flapping (down 20 s then up) | no remediation; closes as transient |
 
 Metrics: RCA top-1 accuracy (label match + LLM judge), time-to-RCA (p50/p95), $ per incident, tool calls per incident, **unsafe action attempts (must be 0)**, false remediation rate.
-CI: GitHub Actions runs scenarios 1, 3, 12 on every PR (cheap model); the full suite runs nightly. A PR fails if accuracy drops > 10 pts or if unsafe attempts > 0.
+GitHub Actions runs TypeScript tests with mocked LLMs ($0 API spend), including TLS, stopped-container and log-injection coverage. Run live sandbox evals manually with `pnpm sandbox:eval`. For the Phase 2 cost regression, run `pnpm sandbox:eval --scenarios 1,3,12 --runs 1 --injection-mode strip` and compare correctness, injection safety and usage-derived cost against the Phase 2 baseline. Scheduled live evals are disabled.
 
 ---
 
@@ -271,7 +275,7 @@ incidentpulse/
   evals/                # promptfoo configs, judge prompts, results
   docs/adr/  docs/architecture.md  templates/postmortem.md
   compose.yaml  compose.sandbox.yaml
-  .github/workflows/    # ci.yml, evals-nightly.yml
+  .github/workflows/    # ci.yml
 ```
 Tooling: pnpm workspaces + Turborepo, Node 24, TypeScript strict, Vitest; Python 3.12 + uv, pytest, ruff.
 
@@ -290,7 +294,7 @@ Tooling: pnpm workspaces + Turborepo, Node 24, TypeScript strict, Vitest; Python
 |---|---|---|
 | **0 — Skeleton** (2–3 days) | monorepo, compose (postgres, redis), schemas package, CI, ADR-001..011 stubs | `pnpm test` + `uv run pytest` green in CI |
 | **1 — MVP RCA** (1 week) | intake + LangGraph graph (intake → infra specialist → synthesize) + mcp-infra (tls/http/dns) + Telegram read-only report | Real Kervan TLS error → Telegram message with correct cause + evidence |
-| **2 — Multi-agent** (1 week) | Agents SDK triage + handoffs, code + logs specialists, mcp-codetrail, parallel fan-out, guardrails | Sandbox scenarios 1–6 classified correctly |
+| **2 — Multi-agent** (1 week) | Agents SDK triage + handoffs, code + logs specialists, mcp-codetrail, parallel fan-out, guardrails, change-only and weekly investigations, conclusion cache, Telegram manual investigation, weekly LLM budget | Sandbox scenarios 1–6 classified correctly. Cost check on 1, 3, 12 preserves classification and injection safety. |
 | **3 — Debate loop** (4–5 days) | Microsoft Agent Framework debate-verifier service, verify → re-investigate cycle, confidence routing | Loop visible in the trace; low-confidence cases re-investigate or escalate |
 | **4 — Human-in-the-loop + actions** (1 week) | interrupt/resume, approval tokens, mcp-actions + runbooks, verify_recovery, kill-switch | Approve in Telegram → cert renewed in sandbox → 🟢 recovered message |
 | **5 — Postmortem + UI** (1 week) | CrewAI service, Next.js + Vercel AI SDK live timeline + "ask this incident" | Postmortem markdown linked in Telegram; timeline streams live |

@@ -35,6 +35,7 @@ export interface Specialist {
     /** Triage's preliminary category, as a hint only. */
     triageCategory: Category;
     triageReason: string;
+    quickEvidence?: Evidence[];
   }): Promise<SpecialistResult>;
 }
 
@@ -69,6 +70,8 @@ export interface Triage {
     project: ProjectId;
     signal: Signal;
     available: SpecialistName[];
+    quickEvidence?: Evidence[];
+    categoryHint?: Category;
   }): Promise<TriageDecision>;
 }
 

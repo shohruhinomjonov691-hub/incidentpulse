@@ -259,7 +259,7 @@ describe("report formatting", () => {
       costUsd: 0,
       overBudget: null,
       budgetUsd: 0.5,
-      dailyBudgetUsd: 3,
+      weeklyBudgetUsd: 3,
     });
     expect(text).toContain("Sabab: aniqlanmadi");
     expect(text).toContain("Dalil: tls_inspect(kervan.uz)");
@@ -293,7 +293,7 @@ describe("evidence line is never cut in the middle of a token", () => {
     costUsd: 0,
     overBudget: null,
     budgetUsd: 0.5,
-    dailyBudgetUsd: 3,
+    weeklyBudgetUsd: 3,
   });
 
   test("the real Kervan evidence (the line that used to be cut at 'is…') now fits whole", () => {
@@ -322,12 +322,12 @@ describe("escalation message", () => {
     const text = formatEscalation({
       incidentId: "inc-5",
       project: "kervan",
-      reason: "daily_budget",
+      reason: "weekly_budget",
       evidence: [],
       costUsd: 0,
-      spentTodayUsd: 3.1,
+      spentThisWeekUsd: 3.1,
       budgetUsd: 0.5,
-      dailyBudgetUsd: 3,
+      weeklyBudgetUsd: 3,
     });
     expect(text.split("\n")).toHaveLength(2);
     expect(text.length).toBeLessThan(200);
@@ -352,7 +352,7 @@ describe("evidence shown in Telegram is de-duplicated", () => {
       costUsd: 0,
       overBudget: null,
       budgetUsd: 0.5,
-      dailyBudgetUsd: 3,
+      weeklyBudgetUsd: 3,
     });
     const line = text.split("\n").find((l) => l.startsWith("Dalil:")) as string;
     expect(line.split(" · ")).toHaveLength(2);

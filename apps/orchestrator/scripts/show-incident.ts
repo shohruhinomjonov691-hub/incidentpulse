@@ -27,7 +27,7 @@ try {
     evidence: raw.evidence ?? [],
     hypotheses: raw.hypotheses ?? [],
     costUsd: raw.costUsd ?? 0,
-    dailySpentUsd: raw.dailySpentUsd ?? 0,
+    weeklySpentUsd: raw.weeklySpentUsd ?? 0,
     overBudget: raw.overBudget ?? null,
     trace: raw.trace ?? [],
     unsafeAttempts: raw.unsafeAttempts ?? 0,
@@ -52,7 +52,7 @@ try {
     console.log(`${h.id} (${h.confidence}) [${h.supportingEvidenceIds}] ${h.cause}`);
   console.log("--- telegram message (as sent)");
   const budgetUsd = Number(process.env.INCIDENT_BUDGET_USD ?? 0.5);
-  const dailyBudgetUsd = Number(process.env.DAILY_BUDGET_USD ?? 3);
+  const weeklyBudgetUsd = Number(process.env.WEEKLY_BUDGET_USD ?? 0.5);
   console.log(
     s.escalation
       ? formatEscalation({
@@ -61,9 +61,9 @@ try {
           reason: s.escalation.reason,
           evidence: s.evidence,
           costUsd: s.costUsd,
-          spentTodayUsd: s.dailySpentUsd,
+          spentThisWeekUsd: s.weeklySpentUsd,
           budgetUsd,
-          dailyBudgetUsd,
+          weeklyBudgetUsd,
         })
       : formatReport({
           incidentId: s.incidentId,
@@ -73,7 +73,7 @@ try {
           costUsd: s.costUsd,
           overBudget: s.overBudget,
           budgetUsd,
-          dailyBudgetUsd,
+          weeklyBudgetUsd,
         }),
   );
 } finally {

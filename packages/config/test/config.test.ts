@@ -19,15 +19,33 @@ describe("loadOrchestratorConfig", () => {
     const c = loadOrchestratorConfig(base);
     expect(c.model).toBe("gpt-5.4-mini");
     expect(c.budgetUsd).toBe(0.5);
-    expect(c.dailyBudgetUsd).toBe(3);
+    expect(c.weeklyBudgetUsd).toBe(0.5);
+    expect(c.investigateMode).toBe("on_change");
+    expect(c.telegramAllowedUserIds.size).toBe(0);
     expect(c.pricing).toEqual({ inputPerM: 0.75, cachedInputPerM: 0.075, outputPerM: 4.5 });
     expect(c.projectDomains.kervan).toEqual(["kervan.uz"]);
   });
 
-  test("daily budget is configurable and must be positive", () => {
-    expect(loadOrchestratorConfig({ ...base, DAILY_BUDGET_USD: "1.5" }).dailyBudgetUsd).toBe(1.5);
-    expect(() => loadOrchestratorConfig({ ...base, DAILY_BUDGET_USD: "0" })).toThrow(
-      /DAILY_BUDGET_USD/,
+  test("weekly budget is configurable and must be positive", () => {
+    expect(loadOrchestratorConfig({ ...base, WEEKLY_BUDGET_USD: "1.5" }).weeklyBudgetUsd).toBe(1.5);
+    expect(() => loadOrchestratorConfig({ ...base, WEEKLY_BUDGET_USD: "0" })).toThrow(
+      /WEEKLY_BUDGET_USD/,
+    );
+  });
+
+  test("weekly mode and explicit Telegram user allowlist are configurable", () => {
+    const c = loadOrchestratorConfig({
+      ...base,
+      INVESTIGATE_MODE: "weekly",
+      TELEGRAM_ALLOWED_USER_IDS: "42, 100,42",
+    });
+    expect(c.investigateMode).toBe("weekly");
+    expect([...c.telegramAllowedUserIds]).toEqual([42, 100]);
+    expect(() => loadOrchestratorConfig({ ...base, INVESTIGATE_MODE: "daily" })).toThrow(
+      /INVESTIGATE_MODE/,
+    );
+    expect(() => loadOrchestratorConfig({ ...base, TELEGRAM_ALLOWED_USER_IDS: "alice" })).toThrow(
+      /TELEGRAM_ALLOWED_USER_IDS/,
     );
   });
 
@@ -77,7 +95,6 @@ describe("loadIntakeConfig", () => {
     const c = loadIntakeConfig({ WEBHOOK_HMAC_SECRET: "b".repeat(32) });
     expect(c.port).toBe(8787);
     expect(c.host).toBe("127.0.0.1");
-    expect(c.dedupTtlMs).toBe(600_000);
   });
 });
 

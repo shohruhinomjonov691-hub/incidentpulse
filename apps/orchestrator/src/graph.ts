@@ -1,3 +1,4 @@
+import type { ModelPricing } from "@incidentpulse/config";
 import { describeError, type Redactor } from "@incidentpulse/redact";
 import {
   type Category,
@@ -17,8 +18,10 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph";
-import type { DailyBudget } from "./daily-budget.ts";
+import { WeeklyBudgetExhausted } from "./agents/sdk.ts";
+import { costOf, sumUsage } from "./cost.ts";
 import { scrubText } from "./guardrails.ts";
+import type { PrimaryEvidence } from "./primary-evidence.ts";
 import {
   type EscalationReason,
   formatEscalation,
@@ -34,6 +37,7 @@ import {
   type TraceEvent,
   type Triage,
 } from "./types.ts";
+import type { WeeklyBudget } from "./weekly-budget.ts";
 
 /**
  * Graph (SPEC §13 Phase 2, §8 budgets):
@@ -41,11 +45,11 @@ import {
  *   intake → triage ──Send──► investigate (one run per chosen specialist, in parallel) → join
  *      │        │                                                                        │
  *      │        └── a budget is spent ──────────────────────────────────┐                ▼
- *      └── today's budget already spent ──────────────────────────────► escalate ◄── synthesize → report
+ *      └── this week's budget already spent ──────────────────────────────► escalate ◄── synthesize → report
  *                                                    (guardrail rejected the synthesis) ──┘
  */
 
-const EVIDENCE_ORDER: Record<string, number> = { t: 0, i: 1, l: 2, c: 3 };
+const EVIDENCE_ORDER: Record<string, number> = { p: 0, t: 0, i: 1, l: 2, c: 3 };
 function compareEvidence(a: Evidence, b: Evidence): number {
   const rank = (e: Evidence) => EVIDENCE_ORDER[e.id.charAt(0)] ?? 9;
   return rank(a) - rank(b) || a.id.localeCompare(b.id, "en", { numeric: true });
@@ -57,6 +61,7 @@ const IncidentAnnotation = Annotation.Root({
   incidentId: Annotation<string>(),
   project: Annotation<ProjectId>(),
   signal: Annotation<Signal>(),
+  primary: Annotation<PrimaryEvidence | undefined>(),
   category: Annotation<Category | undefined>(),
   /** Parallel branches append; the reducer keeps a deterministic order regardless of finish time. */
   evidence: Annotation<Evidence[]>({
@@ -67,10 +72,10 @@ const IncidentAnnotation = Annotation.Root({
   iteration: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
   /** Nodes return a delta; the reducer keeps the running total (SPEC §3.1 costUsd). */
   costUsd: Annotation<number>({ reducer: sum, default: () => 0 }),
-  /** Which budget (if any) is spent. "daily" wins over "incident". */
+  /** Which budget (if any) is spent. "weekly" wins over "incident". */
   overBudget: Annotation<OverBudget>({ reducer: (_a, b) => b, default: () => null }),
-  /** Today's total spend (all incidents). max(): parallel branches may report in any order. */
-  dailySpentUsd: Annotation<number>({ reducer: (a, b) => Math.max(a, b), default: () => 0 }),
+  /** This week's total spend (all incidents). max(): parallel branches may report in any order. */
+  weeklySpentUsd: Annotation<number>({ reducer: (a, b) => Math.max(a, b), default: () => 0 }),
   triageResult: Annotation<
     | { category: Category; specialists: SpecialistName[]; reason: string; fallback: boolean }
     | undefined
@@ -98,9 +103,11 @@ export interface GraphDeps {
   redact: Redactor;
   /** Hard stop per incident, USD (SPEC §8). */
   budgetUsd: number;
-  /** Hard stop per calendar day across all incidents, USD (SPEC §8). */
-  dailyBudgetUsd: number;
-  dailyBudget: DailyBudget;
+  /** Hard stop per calendar week across all incidents, USD (SPEC §8). */
+  weeklyBudgetUsd: number;
+  weeklyBudget: WeeklyBudget;
+  /** Live model requests already charge the ledger. Mocks are accounted for by node. */
+  requestPricing?: ModelPricing;
   checkpointer?: BaseCheckpointSaver;
   now?: () => Date;
 }
@@ -111,6 +118,7 @@ interface InvestigatePayload {
   signal: Signal;
   triageCategory: Category;
   triageReason: string;
+  quickEvidence?: Evidence[];
 }
 
 /** The SPEC §3.1 view of the graph state, validated against the shared contract. */
@@ -137,15 +145,27 @@ export function buildIncidentGraph(deps: GraphDeps) {
     ...(detail ? { detail } : {}),
   });
 
-  const classify = (incidentCostUsd: number, dailyTotalUsd: number): OverBudget => {
-    if (dailyTotalUsd >= deps.dailyBudgetUsd) return "daily";
+  const account = (usd: number) =>
+    deps.requestPricing ? deps.weeklyBudget.spentUsd(now()) : deps.weeklyBudget.addUsd(usd, now());
+  const whenExhausted = (error: WeeklyBudgetExhausted) => ({
+    overBudget: "weekly" as const,
+    weeklySpentUsd: error.spentUsd,
+    costUsd:
+      error.incidentStageCostUsd ??
+      (deps.requestPricing && error.state
+        ? costOf(sumUsage([error.state.usage]), deps.requestPricing)
+        : 0),
+  });
+
+  const classify = (incidentCostUsd: number, weeklyTotalUsd: number): OverBudget => {
+    if (weeklyTotalUsd >= deps.weeklyBudgetUsd) return "weekly";
     if (incidentCostUsd >= deps.budgetUsd) return "incident";
     return null;
   };
 
   const intake = async (state: GraphState) => {
-    // Daily gate: when today's budget is already spent, no LLM call is made at all.
-    const spent = await deps.dailyBudget.spentUsd(now());
+    // Weekly gate: when this week's budget is already spent, no LLM call is made at all.
+    const spent = await deps.weeklyBudget.spentUsd(now());
     // The monitor text is outside data: normalize it and strip injection-looking lines.
     // Scrub line by line first (so one hostile line does not erase the rest), then flatten.
     const scrubbed = scrubText(state.signal.summary.slice(0, 2000));
@@ -157,14 +177,16 @@ export function buildIncidentGraph(deps: GraphDeps) {
         summary: summary.text,
       },
       iteration: 0,
-      dailySpentUsd: spent,
-      overBudget: spent >= deps.dailyBudgetUsd ? ("daily" as const) : null,
-      injectionFlags: summary.flaggedCount,
+      weeklySpentUsd: spent,
+      overBudget: spent >= deps.weeklyBudgetUsd ? ("weekly" as const) : null,
+      injectionFlags: summary.flaggedCount + (state.primary?.injectionFlags ?? 0),
+      unsafeAttempts: state.primary?.unsafeAttempts ?? 0,
+      evidence: state.primary?.quickEvidence ?? [],
       trace: [
         event("intake", "signal_received", {
           project: state.project,
           injectionFlags: summary.flaggedCount,
-          dailySpentUsd: Number(spent.toFixed(6)),
+          weeklySpentUsd: Number(spent.toFixed(6)),
         }),
       ],
     };
@@ -177,8 +199,21 @@ export function buildIncidentGraph(deps: GraphDeps) {
         `No specialists available for project "${state.project}" (set PROJECT_DOMAINS_JSON, PROJECT_CONTAINERS_JSON or the CodeTrail/GitHub settings)`,
       );
     }
-    const d = await deps.triage.triage({ project: state.project, signal: state.signal, available });
-    const dailyTotal = await deps.dailyBudget.addUsd(d.costUsd, now());
+    const d = await deps.triage
+      .triage({
+        project: state.project,
+        signal: state.signal,
+        available,
+        ...(state.primary
+          ? { quickEvidence: state.primary.quickEvidence, categoryHint: state.primary.category }
+          : {}),
+      })
+      .catch((error: unknown) => {
+        if (error instanceof WeeklyBudgetExhausted) return error;
+        throw error;
+      });
+    if (d instanceof WeeklyBudgetExhausted) return whenExhausted(d);
+    const weeklyTotal = await account(d.costUsd);
     return {
       category: d.category,
       triageResult: {
@@ -189,8 +224,8 @@ export function buildIncidentGraph(deps: GraphDeps) {
       },
       evidence: d.evidence,
       costUsd: d.costUsd,
-      dailySpentUsd: dailyTotal,
-      overBudget: classify(state.costUsd + d.costUsd, dailyTotal),
+      weeklySpentUsd: weeklyTotal,
+      overBudget: classify(state.costUsd + d.costUsd, weeklyTotal),
       unsafeAttempts: d.blockedCalls,
       injectionFlags: d.injectionFlags,
       trace: [
@@ -209,7 +244,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
         event("triage", "decision", {
           category: d.category,
           specialists: d.specialists,
-          quickProbes: d.evidence.length,
+          quickProbes: state.evidence.length + d.evidence.length,
           costUsd: Number(d.costUsd.toFixed(6)),
         }),
       ],
@@ -236,12 +271,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
         signal: payload.signal,
         triageCategory: payload.triageCategory,
         triageReason: payload.triageReason,
+        ...(payload.quickEvidence ? { quickEvidence: payload.quickEvidence } : {}),
       });
-      const dailyTotal = await deps.dailyBudget.addUsd(r.costUsd, now());
+      const weeklyTotal = await account(r.costUsd);
       return {
         evidence: r.evidence,
         costUsd: r.costUsd,
-        dailySpentUsd: dailyTotal,
+        weeklySpentUsd: weeklyTotal,
         unsafeAttempts: r.blockedCalls,
         injectionFlags: r.injectionFlags,
         trace: [
@@ -257,6 +293,10 @@ export function buildIncidentGraph(deps: GraphDeps) {
         ],
       };
     } catch (error) {
+      if (error instanceof WeeklyBudgetExhausted) {
+        const { overBudget: _overBudget, ...usage } = whenExhausted(error);
+        return { ...usage, trace: [event("investigate", "weekly_budget_exhausted")] };
+      }
       // One failing specialist must not sink the incident: record it and let the others finish.
       return {
         trace: [
@@ -272,12 +312,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
   const join = async (state: GraphState) => {
     const chosen = state.triageResult?.specialists.length ?? 0;
     const failed = state.trace.filter((e) => e.event === "specialist_failed").length;
-    if (chosen > 0 && failed >= chosen)
+    const spent = await deps.weeklyBudget.spentUsd(now());
+    if (spent < deps.weeklyBudgetUsd && chosen > 0 && failed >= chosen)
       throw new Error("Every specialist failed; nothing to synthesize");
-    const spent = await deps.dailyBudget.spentUsd(now());
+    const depleted = state.trace.some((entry) => entry.event === "weekly_budget_exhausted");
     return {
-      dailySpentUsd: spent,
-      overBudget: classify(state.costUsd, spent),
+      weeklySpentUsd: spent,
+      overBudget: depleted ? ("weekly" as const) : classify(state.costUsd, spent),
       trace: [
         event("join", "evidence_merged", {
           evidence: state.evidence.length,
@@ -295,13 +336,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
         evidence: state.evidence,
         triageCategory: state.triageResult?.category,
       });
-      const dailyTotal = await deps.dailyBudget.addUsd(result.costUsd, now());
+      const weeklyTotal = await account(result.costUsd);
       return {
         category: result.category,
         hypotheses: result.hypotheses,
         costUsd: result.costUsd,
-        dailySpentUsd: dailyTotal,
-        overBudget: classify(state.costUsd + result.costUsd, dailyTotal),
+        weeklySpentUsd: weeklyTotal,
+        overBudget: classify(state.costUsd + result.costUsd, weeklyTotal),
         trace: [
           event("synthesize", "synthesized", {
             category: result.category,
@@ -311,11 +352,15 @@ export function buildIncidentGraph(deps: GraphDeps) {
         ],
       };
     } catch (error) {
+      if (error instanceof WeeklyBudgetExhausted) {
+        return whenExhausted(error);
+      }
       if (!(error instanceof SynthesisRejectedError)) throw error;
-      const dailyTotal = await deps.dailyBudget.addUsd(error.costUsd, now());
+      const weeklyTotal = await account(error.costUsd);
       return {
         costUsd: error.costUsd,
-        dailySpentUsd: dailyTotal,
+        weeklySpentUsd: weeklyTotal,
+        overBudget: classify(state.costUsd + error.costUsd, weeklyTotal),
         guardrailRejection: error.problems.join("; ").slice(0, 500),
         trace: [event("synthesize", "guardrail_rejected", { problems: error.problems })],
       };
@@ -333,7 +378,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
       costUsd: state.costUsd,
       overBudget: state.overBudget,
       budgetUsd: deps.budgetUsd,
-      dailyBudgetUsd: deps.dailyBudgetUsd,
+      weeklyBudgetUsd: deps.weeklyBudgetUsd,
     });
     const sent = await deps.notifier.send(deps.redact(text));
     return { reportSent: { sentAt: now().toISOString(), messageId: sent.messageId } };
@@ -341,20 +386,21 @@ export function buildIncidentGraph(deps: GraphDeps) {
 
   const escalate = async (state: GraphState) => {
     toIncidentState(state);
-    const reason: EscalationReason = state.guardrailRejection
-      ? "guardrail"
-      : state.overBudget === "daily"
-        ? "daily_budget"
-        : "incident_budget";
+    const reason: EscalationReason =
+      state.overBudget === "weekly"
+        ? "weekly_budget"
+        : state.guardrailRejection
+          ? "guardrail"
+          : "incident_budget";
     const text = formatEscalation({
       incidentId: state.incidentId,
       project: state.project,
       reason,
       evidence: state.evidence,
       costUsd: state.costUsd,
-      spentTodayUsd: state.dailySpentUsd,
+      spentThisWeekUsd: state.weeklySpentUsd,
       budgetUsd: deps.budgetUsd,
-      dailyBudgetUsd: deps.dailyBudgetUsd,
+      weeklyBudgetUsd: deps.weeklyBudgetUsd,
     });
     const sent = await deps.notifier.send(deps.redact(text));
     return {
@@ -396,6 +442,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
                     signal: s.signal,
                     triageCategory: s.triageResult?.category ?? "unknown",
                     triageReason: s.triageResult?.reason ?? "",
+                    quickEvidence: s.evidence,
                   } satisfies InvestigatePayload),
               ),
         ["investigate", "escalate"],
@@ -407,7 +454,8 @@ export function buildIncidentGraph(deps: GraphDeps) {
       })
       .addConditionalEdges(
         "synthesize",
-        (s: GraphState) => (s.guardrailRejection ? "escalate" : "report"),
+        (s: GraphState) =>
+          s.guardrailRejection || s.overBudget === "weekly" ? "escalate" : "report",
         { escalate: "escalate", report: "report" },
       )
       .addEdge("report", END)

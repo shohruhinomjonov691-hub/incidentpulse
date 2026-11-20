@@ -1,8 +1,10 @@
+import type { Redactor } from "@incidentpulse/redact";
 import { MCPServerStdio } from "@openai/agents";
 
 type MCPServerStdioOptions = ConstructorParameters<typeof MCPServerStdio>[0];
 
-import { guardToolOutput, type InjectionMode } from "./guardrails.ts";
+import { buildEvidence } from "./evidence.ts";
+import { detectInjection, guardToolOutput, type InjectionMode } from "./guardrails.ts";
 
 /** One tool call as seen by the guarded server. `rawText` is already scrubbed (strip mode). */
 export interface ToolCallRecord {
@@ -34,6 +36,7 @@ export interface GuardedMcpOptions {
   mode: InjectionMode;
   /** Label used in the <untrusted source="..."> wrapper. */
   source: string;
+  redact: Redactor;
 }
 
 /**
@@ -57,6 +60,31 @@ export class GuardedMcpServer extends MCPServerStdio {
     const guarded = guardToolOutput(raw, {
       source: `${this.guard.source}/${args[0]}`,
       mode: this.guard.mode,
+      compact: (body) => {
+        const digest = buildEvidence({
+          id: "",
+          tool: args[0],
+          output: body,
+          at: new Date(),
+          redact: this.guard.redact,
+        }).excerpt;
+        if (this.guard.mode !== "mark" || detectInjection(body).length === 0) return digest;
+        // Keep a sample of marked lines in the model context even when the diagnostic digest omits them.
+        let lines = [body];
+        if (args[0] === "docker_logs") {
+          try {
+            const value = JSON.parse(body);
+            if (Array.isArray(value?.lines))
+              lines = value.lines.filter((line: unknown) => typeof line === "string");
+          } catch {
+            // Non-JSON errors use the same bounded fallback.
+          }
+        }
+        const marked = lines
+          .filter((line) => detectInjection(line).length > 0)
+          .map((line) => line.slice(0, 450));
+        return this.guard.redact([digest, ...new Set(marked)].join("\n").slice(0, 1500));
+      },
     });
     this.calls.push({
       tool: args[0],

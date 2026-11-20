@@ -1,4 +1,9 @@
-import { INCIDENT_QUEUE_NAME, type IncidentJob } from "@incidentpulse/schemas";
+import { createHash } from "node:crypto";
+import {
+  INCIDENT_JOB_OPTIONS,
+  INCIDENT_QUEUE_NAME,
+  type IncidentJob,
+} from "@incidentpulse/schemas";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { IncidentQueue } from "./server.ts";
@@ -7,10 +12,15 @@ export interface BullIncidentQueue extends IncidentQueue {
   close(): Promise<void>;
 }
 
-/** BullMQ producer. Same project+check inside `dedupTtlMs` collapses into one job (SPEC ADR-009). */
+/** A retransmission can be dropped. Distinct observations must reach the worker in order. */
+export function observationKey(job: IncidentJob): string {
+  const { check, level, summary, at } = job.signal;
+  return createHash("sha256")
+    .update(JSON.stringify([job.project, check, level, summary, at, job.category]))
+    .digest("hex");
+}
 export function createBullQueue(options: {
   redisUrl: string;
-  dedupTtlMs: number;
   queueName?: string;
 }): BullIncidentQueue {
   const connection = new Redis(options.redisUrl, { maxRetriesPerRequest: null });
@@ -20,12 +30,8 @@ export function createBullQueue(options: {
     async enqueue(job) {
       const added = await queue.add("incident", job, {
         jobId: job.incidentId,
-        // BullMQ job ids and dedup ids must not contain ":".
-        deduplication: { id: job.dedupKey.replaceAll(":", "__"), ttl: options.dedupTtlMs },
-        attempts: 2,
-        backoff: { type: "exponential", delay: 5000 },
-        removeOnComplete: { age: 86_400, count: 1000 },
-        removeOnFail: { age: 7 * 86_400 },
+        ...INCIDENT_JOB_OPTIONS,
+        deduplication: { id: observationKey(job), ttl: 600_000 },
       });
       // On a duplicate BullMQ returns the *existing* job id (the data on the object is ours).
       const id = added.id ?? job.incidentId;

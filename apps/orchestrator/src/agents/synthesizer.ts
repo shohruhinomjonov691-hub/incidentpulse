@@ -16,9 +16,11 @@ import {
 } from "@openai/agents";
 import { z } from "zod";
 import { costOf, sumUsage, type UsageLike } from "../cost.ts";
+import { evidenceForModel } from "../evidence.ts";
 import { checkSynthesis, createGroundingOutputGuardrail } from "../guardrails.ts";
 import { CATEGORY_GUIDE } from "../prompts.ts";
 import { SynthesisRejectedError, type Synthesizer } from "../types.ts";
+import { WeeklyBudgetExhausted } from "./sdk.ts";
 
 /**
  * Schema the LLM must fill (structured output). Kept free of numeric range constraints because
@@ -97,18 +99,26 @@ export function createSynthesizer(options: SynthesizerOptions): Synthesizer {
 
   return {
     async synthesize({ project, signal, evidence, triageCategory }) {
+      const promptEvidence = evidenceForModel(evidence);
+      const monitor =
+        `check=${signal.check} level=${signal.level} summary=${signal.summary}`.replaceAll(
+          /<\/\s*untrusted/gi,
+          "</ untrusted",
+        );
       const basePrompt = [
         `Project: ${project}`,
         "Monitor signal (untrusted):",
-        `<untrusted>check=${signal.check} level=${signal.level} summary=${signal.summary}</untrusted>`,
+        `<untrusted>${monitor}</untrusted>`,
         triageCategory
           ? `Triage's preliminary category (a hint, may be wrong): ${triageCategory}`
           : "",
         "Evidence:",
         "<untrusted>",
-        ...evidence.map((e) => `[${e.id}] ${e.excerpt}`),
+        ...promptEvidence.map(
+          (e) => `[${e.id}] ${e.excerpt.replaceAll(/<\/\s*untrusted/gi, "</ untrusted")}`,
+        ),
         "</untrusted>",
-        `Valid evidence ids: ${evidence.map((e) => e.id).join(", ") || "(none)"}`,
+        `Valid evidence ids: ${promptEvidence.map((e) => e.id).join(", ") || "(none)"}`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -121,10 +131,11 @@ export function createSynthesizer(options: SynthesizerOptions): Synthesizer {
           model: options.model,
           instructions: INSTRUCTIONS,
           outputType: LlmSynthesisSchema,
-          outputGuardrails: [createGroundingOutputGuardrail(evidence)],
-          ...(options.reasoningEffort
-            ? { modelSettings: { reasoning: { effort: options.reasoningEffort } } }
-            : {}),
+          outputGuardrails: [createGroundingOutputGuardrail(promptEvidence)],
+          modelSettings: {
+            maxTokens: 900,
+            ...(options.reasoningEffort ? { reasoning: { effort: options.reasoningEffort } } : {}),
+          },
         });
         const feedback =
           problems.length > 0
@@ -142,6 +153,10 @@ export function createSynthesizer(options: SynthesizerOptions): Synthesizer {
           };
         } catch (error) {
           cost += costOf(sumUsage(usageOfError(error)), options.pricing);
+          if (error instanceof WeeklyBudgetExhausted) {
+            error.incidentStageCostUsd = cost;
+            throw error;
+          }
           if (error instanceof OutputGuardrailTripwireTriggered) {
             const info = (error.result.output as { outputInfo?: { problems?: string[] } })
               .outputInfo;

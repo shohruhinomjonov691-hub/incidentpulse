@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/schemas": "workspace:*",
     "grammy": "catalog:frameworks"
   }
 }

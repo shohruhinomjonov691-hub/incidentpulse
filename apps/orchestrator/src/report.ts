@@ -7,8 +7,8 @@ import {
 
 /** Telegram messages (Uzbek, short, read-only, no buttons). Layout follows SPEC §6. */
 
-export type OverBudget = "incident" | "daily" | null;
-export type EscalationReason = "incident_budget" | "daily_budget" | "guardrail";
+export type OverBudget = "incident" | "weekly" | null;
+export type EscalationReason = "incident_budget" | "weekly_budget" | "guardrail";
 
 export interface ReportView {
   incidentId: string;
@@ -18,7 +18,7 @@ export interface ReportView {
   costUsd: number;
   overBudget: OverBudget;
   budgetUsd: number;
-  dailyBudgetUsd: number;
+  weeklyBudgetUsd: number;
 }
 
 const MAX_EVIDENCE_LINES = 3;
@@ -72,9 +72,9 @@ export function formatReport(view: ReportView): string {
     lines.push(
       `⚠️ Byudjet (${usd(view.budgetUsd)}) tugadi — tergov to'liq emas, inson ko'rigi kerak.`,
     );
-  } else if (view.overBudget === "daily") {
+  } else if (view.overBudget === "weekly") {
     lines.push(
-      `⚠️ Kunlik byudjet (${usd(view.dailyBudgetUsd)}) tugadi — yangi tergovlar to'xtatildi, inson ko'rigi kerak.`,
+      `⚠️ Haftalik byudjet (${usd(view.weeklyBudgetUsd)}) tugadi — yangi tergovlar to'xtatildi, inson ko'rigi kerak.`,
     );
   }
   lines.push("Taklif: yo'q — faqat tahlil, hech qanday amal bajarilmaydi");
@@ -88,9 +88,9 @@ export interface EscalationView {
   reason: EscalationReason;
   evidence: Evidence[];
   costUsd: number;
-  spentTodayUsd: number;
+  spentThisWeekUsd: number;
   budgetUsd: number;
-  dailyBudgetUsd: number;
+  weeklyBudgetUsd: number;
 }
 
 /** SPEC §3.2 `escalate`: short "needs a human" notice with whatever evidence exists. */
@@ -102,9 +102,9 @@ export function formatEscalation(view: EscalationView): string {
     lines.push(
       "Sabab: tahlil natijasi guardrail tekshiruvidan o'tmadi (dalilga tayanmaydi) — avtomatik xulosa rad etildi.",
     );
-  } else if (view.reason === "daily_budget") {
+  } else if (view.reason === "weekly_budget") {
     lines.push(
-      `Sabab: kunlik byudjet (${usd(view.dailyBudgetUsd)}) tugadi (bugun ${usd(view.spentTodayUsd)}) — avtomatik tergov to'xtatildi.`,
+      `Sabab: haftalik byudjet (${usd(view.weeklyBudgetUsd)}) tugadi (bu hafta ${usd(view.spentThisWeekUsd)}) — avtomatik tergov to'xtatildi.`,
     );
   } else {
     lines.push(

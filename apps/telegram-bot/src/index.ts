@@ -1,10 +1,7 @@
 import { createRedactor, describeError, type Redactor } from "@incidentpulse/redact";
 import { Api } from "grammy";
 
-/**
- * Phase 1: outbound, read-only notifications. No buttons, no commands, no callbacks yet
- * (inline Approve/Reject, /status and /stop arrive in Phase 4).
- */
+export { createInvestigationBot } from "./investigate.ts";
 
 export interface Notifier {
   send(text: string): Promise<{ messageId: number }>;

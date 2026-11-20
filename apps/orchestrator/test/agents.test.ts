@@ -11,8 +11,9 @@ import {
   type SpecialistFactoryOptions,
 } from "../src/agents/specialists.ts";
 import { createSynthesizer } from "../src/agents/synthesizer.ts";
+import { createPrimaryProbe } from "../src/primary-evidence.ts";
 import { SynthesisRejectedError } from "../src/types.ts";
-import { tlsMismatchEvidence } from "./helpers.ts";
+import { job, tlsMismatchEvidence } from "./helpers.ts";
 import { finalText, ScriptedModel, toolCall } from "./scripted-model.ts";
 
 setTracingDisabled(true);
@@ -444,5 +445,74 @@ describe("synthesizer: structured output + OUTPUT guardrail", () => {
   test("non-guardrail errors (e.g. transport) are not swallowed as rejections", async () => {
     const model = new ScriptedModel([]); // exhausted script → throws a plain Error
     await expect(run(synthesizer(model))).rejects.not.toBeInstanceOf(SynthesisRejectedError);
+  });
+});
+
+test("synthesis receives one citation per fact even if the triage and infra probe latencies differ", async () => {
+  const model = new ScriptedModel([
+    finalText(
+      JSON.stringify({
+        category: "http_5xx",
+        hypotheses: [
+          { cause: "Upstream qaytargan HTTP 502", supportingEvidenceIds: ["p1"], confidence: 0.9 },
+        ],
+        missingInformation: null,
+      }),
+    ),
+  ]);
+  const e = {
+    ...tlsMismatchEvidence("p1"),
+    tool: "http_probe",
+    excerpt: "http_probe(https://kervan.uz/): status=502 latency=35ms",
+  };
+  const result = await createSynthesizer(base(model)).synthesize({
+    project: "kervan",
+    signal,
+    evidence: [e, { ...e, id: "i1", excerpt: e.excerpt.replace("35ms", "18ms") }],
+    triageCategory: "http_5xx",
+  });
+  expect(result.hypotheses[0]?.supportingEvidenceIds).toEqual(["p1"]);
+  expect(model.seen()).toContain("[p1]");
+  expect(model.seen()).not.toContain("[i1]");
+  expect(model.requests[0]?.modelSettings.maxTokens).toBe(900);
+});
+
+describe("primary evidence fingerprint", () => {
+  const makeProbe = (state: string, status: string, logs: string) =>
+    createPrimaryProbe(
+      base(new ScriptedModel([]), {
+        infraBin: FAKE_DOCKER_BIN,
+        childEnv: { FAKE_DOCKER_PS: psRow("ipsb-a-app", state, status), FAKE_DOCKER_LOGS: logs },
+        resources: {
+          domains: { ...empty },
+          containers: { ...empty, kervan: ["ipsb-a-"] },
+          codetrail: {},
+        },
+      }),
+    );
+
+  test("container state and changed fault text matter; elapsed time and injection lines do not", async () => {
+    const incident = job();
+    const [first, repeated, changed] = await Promise.all([
+      makeProbe(
+        "exited",
+        "Exited (137) 4 seconds ago",
+        "2026-11-21T04:01:00Z TypeError: missing id",
+      )(incident),
+      makeProbe(
+        "exited",
+        "Exited (137) 6 min ago",
+        `2026-11-21T04:02:00Z TypeError: missing id\n${INJECTION}`,
+      )(incident),
+      makeProbe(
+        "exited",
+        "Exited (137) 8 min ago",
+        "2026-11-21T04:03:00Z TypeError: missing token",
+      )(incident),
+    ]);
+    expect(first.category).toBe("container_down");
+    expect(first.hash).toBe(repeated.hash);
+    expect(first.hash).not.toBe(changed.hash);
+    expect(repeated.injectionFlags).toBeGreaterThan(0);
   });
 });
