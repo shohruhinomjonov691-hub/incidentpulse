@@ -1,0 +1,69 @@
+{
+  "model": "gpt-5.4-mini",
+  "debateModel": "gpt-5.4-nano",
+  "totalCostUsd": 0.021665,
+  "results": [
+    {
+      "scenario": 1,
+      "incidentId": "sandbox-ipsb4a5fcfa6c6-1",
+      "got": "tls",
+      "runbook": "certbot_renew",
+      "approval": "approved",
+      "execution": true,
+      "recovery": {
+        "ok": true,
+        "check": "https://a.localhost:18443/",
+        "at": "2026-11-20T23:22:38.057Z"
+      },
+      "costUsd": 0.0066711999999999995,
+      "audit": [
+        "approved",
+        "execution_claimed",
+        "execution_finished"
+      ],
+      "debate": [
+        {
+          "at": "2026-11-20T23:05:50.051Z",
+          "node": "verify",
+          "event": "debate_verdict",
+          "detail": {
+            "confidence": 0.93,
+            "missing": 4,
+            "round": 1
+          }
+        }
+      ]
+    },
+    {
+      "scenario": 3,
+      "incidentId": "sandbox-ipsb4a5fcfa6c6-3",
+      "got": "container_down",
+      "runbook": "docker_restart",
+      "approval": "approved",
+      "execution": true,
+      "recovery": {
+        "ok": true,
+        "check": "https://a.localhost:18443/",
+        "at": "2026-11-20T23:23:52.158Z"
+      },
+      "costUsd": 0.0131261,
+      "audit": [
+        "approved",
+        "execution_claimed",
+        "execution_finished"
+      ],
+      "debate": [
+        {
+          "at": "2026-11-20T23:23:16.252Z",
+          "node": "verify",
+          "event": "debate_verdict",
+          "detail": {
+            "confidence": 0.9,
+            "missing": 4,
+            "round": 1
+          }
+        }
+      ]
+    }
+  ]
+}
