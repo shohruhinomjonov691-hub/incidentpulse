@@ -1,9 +1,4 @@
 # @incidentpulse/telegram-bot
 
-grammY bot: alerts, inline Approve/Reject, /status, /stop.
-
-**Status:** empty skeleton (Phase 0). Real implementation starts in Phase 1 (see [docs/SPEC.md](../../docs/SPEC.md) §13).
-
-```bash
-pnpm --filter @incidentpulse/telegram-bot test
-```
+grammY-based Telegram notifier. **Phase 1: outbound read-only messages only** (plain text, no buttons, no commands). Inline Approve/Reject, `/status` and `/stop` arrive in Phase 4 (SPEC §6).
+The bot token is masked in every message and error.

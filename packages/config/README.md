@@ -1,9 +1,5 @@
 # @incidentpulse/config
 
-Typed, validated configuration loading shared across apps.
-
-**Status:** empty skeleton (Phase 0). Real implementation starts in Phase 1 (see [docs/SPEC.md](../../docs/SPEC.md) §13).
-
-```bash
-pnpm --filter @incidentpulse/config test
-```
+Typed configuration parsed from an env object (never from files; Node loads `.env` via `--env-file`). Errors name the variable, never its value.
+Model name comes from `OPENAI_MODEL` (default `gpt-5.4-mini`); an unknown model without `MODEL_PRICE_*` fails closed so the cost budget stays meaningful.
+Project → domains map lives here (only `kervan → kervan.uz` is built in; override with `PROJECT_DOMAINS_JSON`).

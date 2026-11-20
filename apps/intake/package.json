@@ -9,11 +9,22 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "node --env-file-if-exists=../../.env src/main.ts",
+    "simulate": "node --env-file-if-exists=../../.env scripts/simulate.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@incidentpulse/config": "workspace:*",
+    "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/schemas": "workspace:*",
+    "bullmq": "catalog:frameworks",
+    "fastify": "catalog:frameworks",
+    "ioredis": "catalog:frameworks",
+    "zod": "catalog:"
   }
 }

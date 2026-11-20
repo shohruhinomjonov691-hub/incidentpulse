@@ -1,7 +1,9 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "tasks": {
-    "test": {},
+    "test": {
+      "env": ["IT_DATABASE_URL", "IT_REDIS_URL"]
+    },
     "typecheck": {},
     "generate": {
       "outputs": ["json/**"]

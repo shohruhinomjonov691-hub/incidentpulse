@@ -56,15 +56,17 @@ export const HypothesisSchema = z.strictObject({
   confidence: Confidence,
 });
 
+export const SignalSchema = z.strictObject({
+  check: z.string(),
+  level: z.string(),
+  summary: z.string(),
+  at: IsoTimestamp,
+});
+
 export const IncidentStateSchema = z.strictObject({
   incidentId: z.string(),
   project: ProjectIdSchema,
-  signal: z.strictObject({
-    check: z.string(),
-    level: z.string(),
-    summary: z.string(),
-    at: IsoTimestamp,
-  }),
+  signal: SignalSchema,
   category: CategorySchema.optional(),
   evidence: z.array(EvidenceSchema),
   hypotheses: z.array(HypothesisSchema),
@@ -102,6 +104,7 @@ export const IncidentStateSchema = z.strictObject({
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 export type RunbookId = z.infer<typeof RunbookIdSchema>;
 export type Category = z.infer<typeof CategorySchema>;
+export type Signal = z.infer<typeof SignalSchema>;
 export type Evidence = z.infer<typeof EvidenceSchema>;
 export type Hypothesis = z.infer<typeof HypothesisSchema>;
 export type IncidentState = z.infer<typeof IncidentStateSchema>;

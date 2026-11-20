@@ -9,11 +9,28 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "node --env-file-if-exists=../../.env src/main.ts",
+    "show": "node --env-file-if-exists=../../.env scripts/show-incident.ts"
   },
   "devDependencies": {
+    "@incidentpulse/intake": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@incidentpulse/config": "workspace:*",
+    "@incidentpulse/mcp-infra": "workspace:*",
+    "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/schemas": "workspace:*",
+    "@incidentpulse/telegram-bot": "workspace:*",
+    "@langchain/core": "catalog:frameworks",
+    "@langchain/langgraph": "catalog:frameworks",
+    "@langchain/langgraph-checkpoint-postgres": "catalog:frameworks",
+    "@openai/agents": "catalog:frameworks",
+    "bullmq": "catalog:frameworks",
+    "ioredis": "catalog:frameworks",
+    "zod": "catalog:"
   }
 }

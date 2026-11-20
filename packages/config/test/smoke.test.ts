@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { PACKAGE_NAME } from "../src/index.ts";
+import { DEFAULT_PROJECT_DOMAINS } from "../src/index.ts";
 
 test("package is wired into the workspace", () => {
-  expect(PACKAGE_NAME).toBe("@incidentpulse/config");
+  expect(DEFAULT_PROJECT_DOMAINS.kervan).toEqual(["kervan.uz"]);
 });

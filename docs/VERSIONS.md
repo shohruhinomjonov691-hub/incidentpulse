@@ -39,6 +39,8 @@ TypeScript pins live in the `catalog` / `catalogs.frameworks` sections of `pnpm-
 | 010 | `grammy` | 1.46.0 |
 | 011 | `promptfoo` | 0.126.0 |
 | — | `fastify` (intake, SPEC §3) | 5.12.8 |
+| 001 | `@langchain/core` (peer of LangGraph) | 1.5.0 |
+| 009 | `ioredis` (peer of BullMQ) | 5.11.1 |
 
 The Python frameworks are declared as optional extras (`agents`, `crew`) so the lockfiles prove they resolve on Python 3.12,
 but they are not installed by default.
@@ -62,3 +64,12 @@ No action needed now; worth revisiting before Phase 7.
 - Timestamps (`at`) are validated as ISO-8601 strings (the spec says `string`).
 - Objects are strict (unknown keys rejected).
 - Resolved 2026-11-21: `Evidence` gained `id: string` (SPEC §3.1 updated); `Hypothesis.supportingEvidenceIds` references it.
+
+## LLM pricing (Phase 1 cost accounting)
+
+Default model `gpt-5.4-mini`: $0.75 / $4.50 per 1M input / output tokens, cached input $0.075 (standard tier). `gpt-5.4-nano` ($0.20 / $1.25) exists but its model page is marked Deprecated.
+Source: https://developers.openai.com/api/docs/pricing , https://developers.openai.com/api/docs/models/gpt-5.4-mini (checked 2026-11-21). `costUsd` is *computed* from token usage; it is not read from an invoice.
+
+## pnpm 12 build scripts
+
+`msgpackr-extract` (an optional native accelerator of BullMQ) is explicitly denied in `pnpm-workspace.yaml` (`allowBuilds`); the pure-JS fallback is used.

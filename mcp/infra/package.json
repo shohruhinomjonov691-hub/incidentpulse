@@ -5,15 +5,21 @@
   "type": "module",
   "description": "Read-only MCP server: tls_inspect, dns_lookup, http_probe, docker_*, ...",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas.ts"
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "node src/bin.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:frameworks",
+    "zod": "catalog:"
   }
 }

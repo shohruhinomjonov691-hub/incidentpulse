@@ -31,3 +31,12 @@ catalogs:
     grammy: 1.46.0
     promptfoo: 0.126.0
     fastify: 5.12.8
+    "@langchain/core": 1.5.0
+    ioredis: 5.11.1
+
+minimumReleaseAgeExclude:
+  - "@langchain/core@1.5.0"
+
+# Native build scripts: deny explicitly (optional accelerators with pure-JS fallbacks)
+allowBuilds:
+  msgpackr-extract: false

@@ -1,6 +1,9 @@
 import { expect, test } from "vitest";
-import { PACKAGE_NAME } from "../src/index.ts";
+import { buildIncidentGraph } from "../src/index.ts";
+import { makeMocks } from "./helpers.ts";
 
-test("package is wired into the workspace", () => {
-  expect(PACKAGE_NAME).toBe("@incidentpulse/orchestrator");
+test("the graph has exactly the Phase 1 nodes", () => {
+  const graph = buildIncidentGraph(makeMocks().deps);
+  const nodes = Object.keys(graph.getGraph().nodes).filter((n) => !n.startsWith("__"));
+  expect(nodes.sort()).toEqual(["infra_specialist", "intake", "report", "synthesize"]);
 });
