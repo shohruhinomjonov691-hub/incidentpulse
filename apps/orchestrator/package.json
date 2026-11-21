@@ -25,20 +25,21 @@
   },
   "dependencies": {
     "@incidentpulse/config": "workspace:*",
+    "@incidentpulse/mcp-actions": "workspace:*",
     "@incidentpulse/mcp-codetrail": "workspace:*",
     "@incidentpulse/mcp-infra": "workspace:*",
     "@incidentpulse/redact": "workspace:*",
     "@incidentpulse/schemas": "workspace:*",
     "@incidentpulse/telegram-bot": "workspace:*",
+    "@incidentpulse/telemetry": "workspace:*",
     "@langchain/core": "catalog:frameworks",
     "@langchain/langgraph": "catalog:frameworks",
     "@langchain/langgraph-checkpoint-postgres": "catalog:frameworks",
+    "@modelcontextprotocol/sdk": "catalog:frameworks",
     "@openai/agents": "catalog:frameworks",
     "bullmq": "catalog:frameworks",
     "ioredis": "catalog:frameworks",
-    "zod": "catalog:",
-    "@incidentpulse/mcp-actions": "workspace:*",
-    "@modelcontextprotocol/sdk": "catalog:frameworks",
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "zod": "catalog:"
   }
 }

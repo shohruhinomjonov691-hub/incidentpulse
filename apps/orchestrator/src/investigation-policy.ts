@@ -9,6 +9,7 @@ import {
 } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import type { Redis } from "ioredis";
+import { causeFingerprint } from "./correlate.ts";
 import type { GraphState, IncidentGraph } from "./graph.ts";
 import { scrubText } from "./guardrails.ts";
 import { hashFacts, type PrimaryEvidence } from "./primary-evidence.ts";
@@ -81,9 +82,28 @@ export function createInvestigationPolicy(options: {
 
     const { state } = await runIncident(graph, job, primary);
     await remember(state, manual);
+    await correlate(state);
     return (
       state.escalation?.reason ??
       (state.approval?.status === "pending" ? "awaiting_approval" : "investigated")
+    );
+  }
+
+  /** Another project went down with the same specific fault within 15 minutes: say so once. */
+  async function correlate(state: GraphState) {
+    const found = causeFingerprint(state.category, state.evidence);
+    if (!found || state.escalation) return;
+    const key = `${prefix}:cause:${found}`;
+    await redis.hset(key, state.project, state.incidentId);
+    await redis.expire(key, 900);
+    const peers = Object.keys(await redis.hgetall(key)).filter((p) => p !== state.project);
+    if (peers.length === 0) return;
+    if (!(await redis.set(`${key}:notified:${state.project}`, "1", "EX", 900, "NX"))) return;
+    const names = [state.project, ...peers]
+      .map((p) => PROJECT_DISPLAY_NAMES[p as ProjectId] ?? p)
+      .join(" + ");
+    await notifier.send(
+      `🔗 ${names} — bir xil sabab (${state.category}): bitta tuzatish hammasini hal qilishi mumkin.`,
     );
   }
 

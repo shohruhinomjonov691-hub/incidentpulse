@@ -11,6 +11,7 @@ import {
   createTelegramNotifier,
   type Notifier,
 } from "@incidentpulse/telegram-bot";
+import { startTelemetry } from "@incidentpulse/telemetry";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { OpenAIProvider } from "@openai/agents";
 import { Redis } from "ioredis";
@@ -26,6 +27,7 @@ import { buildIncidentGraph } from "./graph.ts";
 import { createInvestigationPolicy } from "./investigation-policy.ts";
 import { createJournal } from "./journal.ts";
 import type { Logger } from "./log.ts";
+import { setTelemetry } from "./observability.ts";
 import { createPostmortemWorker, postmortemLink } from "./postmortem.ts";
 import { createPrimaryProbe } from "./primary-evidence.ts";
 import { createRecoveryCheck } from "./recovery.ts";
@@ -47,6 +49,13 @@ export async function startRuntime(options: {
 }) {
   const { config, redact, log, prefix } = options;
   configureAgentsSdk(config.openaiApiKey);
+  // Off unless LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are both set.
+  const tracing = await startTelemetry(process.env, {
+    redact,
+    environment: prefix ? "sandbox" : "production",
+  });
+  setTelemetry(tracing);
+  if (tracing.enabled) log.info("langfuse tracing enabled");
   const redis = new Redis(config.redisUrl);
   const controls = createActionControls(redis, prefix);
   const budgetPrefix = prefix ? `${prefix}:budget:weekly` : undefined;
@@ -72,6 +81,7 @@ export async function startRuntime(options: {
     limitUsd: config.weeklyBudgetUsd,
     pricing: config.pricing,
     reserve,
+    modelName: config.model,
   });
 
   const agentOptions = {
@@ -286,6 +296,7 @@ export async function startRuntime(options: {
       await checkpointer.end();
       await provider.close();
       redis.disconnect();
+      await tracing.shutdown();
     },
   };
 }

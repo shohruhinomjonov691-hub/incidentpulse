@@ -1,17 +1,25 @@
 import { createRedactor, type Redactor } from "@incidentpulse/redact";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { isAllowedHost, isAllowedTarget, isPlainHostname, normalizeHost } from "./allowlist.ts";
+import {
+  isAllowedContainer,
+  isAllowedHost,
+  isAllowedTarget,
+  isPlainHostname,
+  normalizeHost,
+} from "./allowlist.ts";
 import {
   DnsLookupResultSchema,
   DockerLogsResultSchema,
   DockerPsResultSchema,
   HttpProbeResultSchema,
+  Pm2ListResultSchema,
   TlsInspectResultSchema,
 } from "./schemas.ts";
 import { type DnsResolver, dnsLookup } from "./tools/dns.ts";
 import { type DockerRunner, dockerLogs, dockerPs, MAX_TAIL } from "./tools/docker.ts";
 import { httpProbe } from "./tools/http.ts";
+import { containerPm2, type Pm2Runner, pm2List } from "./tools/pm2.ts";
 import { tlsInspect } from "./tools/tls.ts";
 
 export interface InfraServerOptions {
@@ -19,6 +27,11 @@ export interface InfraServerOptions {
   allowedHosts: readonly string[];
   /** Container name prefixes docker_ps / docker_logs may see. Empty = docker tools are not registered. */
   allowedContainers?: readonly string[];
+  /**
+   * pm2 apps `pm2_list` may report. Empty/unset = the tool is not registered. `container` runs pm2
+   * inside that allowlisted container (`docker exec <container> pm2 jlist`); otherwise on this host.
+   */
+  pm2?: { apps: readonly string[]; container?: string };
   /** Per-call network timeout. Fixed by the operator, not the model. */
   timeoutMs?: number;
   /** Applied to docker log lines before they leave this process. */
@@ -27,6 +40,7 @@ export interface InfraServerOptions {
   fetchImpl?: typeof fetch;
   resolver?: DnsResolver;
   dockerRunner?: DockerRunner;
+  pm2Runner?: Pm2Runner;
 }
 
 const READ_ONLY = {
@@ -176,6 +190,30 @@ export function createInfraServer(options: InfraServerOptions): McpServer {
         });
         return ok(result);
       },
+    );
+  }
+
+  const pm2Apps = options.pm2?.apps ?? [];
+  const pm2Container = options.pm2?.container;
+  if (pm2Apps.length > 0) {
+    if (pm2Container && !isAllowedContainer(pm2Container, containers)) {
+      throw new Error("pm2 container must be within the container allowlist");
+    }
+    const runner =
+      options.pm2Runner ??
+      (pm2Container ? containerPm2(pm2Container, options.dockerRunner) : undefined);
+    server.registerTool(
+      "pm2_list",
+      {
+        title: "List pm2 apps",
+        description:
+          "Read-only `pm2 jlist` for the allowlisted pm2 apps: status (online, stopped, errored), restart count and uptime. A pm2 app can be stopped while its host or container is still running.",
+        inputSchema: {},
+        outputSchema: Pm2ListResultSchema,
+        annotations: { title: "pm2_list", ...READ_ONLY, openWorldHint: false },
+      },
+      async () =>
+        ok(await pm2List({ allowedApps: pm2Apps, timeoutMs, ...(runner ? { runner } : {}) })),
     );
   }
 

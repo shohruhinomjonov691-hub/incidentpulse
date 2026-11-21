@@ -3,6 +3,7 @@ import {
   DockerLogsResultSchema,
   DockerPsResultSchema,
   HttpProbeResultSchema,
+  Pm2ListResultSchema,
   TlsInspectResultSchema,
 } from "@incidentpulse/mcp-infra/schemas";
 import type { Category, Evidence, IncidentJob } from "@incidentpulse/schemas";
@@ -16,6 +17,8 @@ export interface PrimaryEvidence {
   quickEvidence: Evidence[];
   unsafeAttempts: number;
   injectionFlags: number;
+  /** Fixed (non-LLM) probe calls made to build this evidence; for cost and tool-call accounting. */
+  toolCalls?: number;
   health?: { endpoints: Array<{ url: string; ok: boolean }>; containers: Record<string, boolean> };
 }
 
@@ -38,12 +41,13 @@ export function createPrimaryProbe(options: ProbeOptions) {
     const health: NonNullable<PrimaryEvidence["health"]> = { endpoints: [], containers: {} };
     const categories = new Set<Category>();
     let injectionFlags = 0;
+    let toolCalls = 0;
 
     if (domains[project].length || containers[project].length) {
       const server = createInfraMcp(
         project,
         options,
-        ["http_probe", "tls_inspect", "docker_ps", "docker_logs"],
+        ["http_probe", "tls_inspect", "docker_ps", "docker_logs", "pm2_list"],
         "quick_probes",
       );
       await server.connect();
@@ -100,6 +104,8 @@ export function createPrimaryProbe(options: ProbeOptions) {
             facts.push(tls);
           }
           if (http.status && http.status >= 500) categories.add("http_5xx");
+          // 504 is a gateway timeout by definition: the proxy waited for a backend that was too slow.
+          if (http.status === 504 || http.status === 408) categories.add("timeout");
           if (/^(ENOTFOUND|EAI_AGAIN)$/.test(http.error ?? "")) categories.add("dns");
           if (/TIMEOUT|TIMEDOUT/i.test(http.error ?? "")) categories.add("timeout");
         }
@@ -134,8 +140,23 @@ export function createPrimaryProbe(options: ProbeOptions) {
             if (keyLines.length || logs.error) facts.push({ name, keyLines, error: logs.error });
           }
         }
+
+        // pm2 apps can be stopped while their container (or host) is up: ask pm2 directly.
+        if (options.resources.pm2?.[project]?.apps.length && !categories.has("tls")) {
+          const pm2 = Pm2ListResultSchema.parse(await call("pm2_list", {}, true));
+          const apps = pm2.apps.sort((a, b) => a.name.localeCompare(b.name));
+          for (const app of apps) health.containers[`pm2:${app.name}`] = app.status === "online";
+          facts.push({
+            pm2: apps.map(({ name, status, restarts }) => ({ name, status, restarts })),
+            error: pm2.error,
+          });
+          if (apps.some((a) => a.status === "stopped" || a.status === "errored")) {
+            categories.add("container_down");
+          }
+        }
       } finally {
         injectionFlags = server.calls.reduce((total, c) => total + c.flaggedCount, 0);
+        toolCalls = server.calls.length;
         await server.close();
       }
     }
@@ -156,6 +177,7 @@ export function createPrimaryProbe(options: ProbeOptions) {
       quickEvidence,
       unsafeAttempts: 0,
       injectionFlags,
+      toolCalls,
       health,
     };
   };

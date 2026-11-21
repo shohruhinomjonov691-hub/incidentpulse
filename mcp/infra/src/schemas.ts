@@ -82,3 +82,20 @@ export const DockerLogsResultSchema = z.object({
   error: z.string().optional(),
 });
 export type DockerLogsResult = z.infer<typeof DockerLogsResultSchema>;
+
+export const Pm2ListResultSchema = z.object({
+  /** Only apps in the operator's pm2 allowlist are returned. */
+  apps: z.array(
+    z.object({
+      name: z.string(),
+      /** online | stopped | stopping | launching | errored | one-launch-status */
+      status: z.string(),
+      restarts: z.number().int(),
+      /** Seconds since the app was last (re)started; absent when it is not running. */
+      uptimeSeconds: z.number().int().optional(),
+    }),
+  ),
+  /** NOT_ALLOWED, ETIMEDOUT, BAD_OUTPUT or a process error code. */
+  error: z.string().optional(),
+});
+export type Pm2ListResult = z.infer<typeof Pm2ListResultSchema>;

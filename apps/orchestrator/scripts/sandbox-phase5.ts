@@ -212,6 +212,15 @@ const notify = (text: string) =>
 // Scenario 1 only. With --auto the script presses Approve through the web API itself (same
 // endpoint and token as the browser button); otherwise it waits for a person to press it.
 const auto = process.argv.includes("--auto");
+// --out <file> keeps the recorded phase5.json untouched (used when recording the demo).
+// --hold <seconds> keeps the web app and services up after RECOVERED (used while recording the demo).
+const holdIndex = process.argv.indexOf("--hold");
+const holdSeconds = holdIndex > 0 ? Math.min(120, Number(process.argv[holdIndex + 1]) || 0) : 0;
+const outIndex = process.argv.indexOf("--out");
+const outFile =
+  outIndex > 0 && process.argv[outIndex + 1]
+    ? (process.argv[outIndex + 1] as string)
+    : join(sandbox, "results/phase5.json");
 const scenario = 1;
 const incidentId = `sandbox-${name}-${scenario}`;
 let row: Record<string, unknown> = {};
@@ -374,10 +383,11 @@ try {
     chat,
   };
   console.log(`RECOVERED cost=${stored?.cost.toFixed(6)} approvedBy=${approval?.decidedBy}`);
+  if (holdSeconds > 0) await sleep(holdSeconds * 1000);
 } finally {
   const totalCostUsd = await runtime?.weeklyBudget.spentUsd(new Date());
   await writeFile(
-    join(sandbox, "results/phase5.json"),
+    outFile,
     `${JSON.stringify(
       {
         model: config.model,

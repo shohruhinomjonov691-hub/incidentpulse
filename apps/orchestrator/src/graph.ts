@@ -29,6 +29,7 @@ import { evidenceForModel } from "./evidence.ts";
 import { toolJournal } from "./guarded-mcp.ts";
 import { scrubText } from "./guardrails.ts";
 import type { IncidentStatus, Journal, TimelineItem } from "./journal.ts";
+import { telemetry } from "./observability.ts";
 import type { PrimaryEvidence } from "./primary-evidence.ts";
 import type { RemediationProposer } from "./remediation-proposer.ts";
 import {
@@ -88,7 +89,9 @@ const IncidentAnnotation = Annotation.Root({
   execution: Annotation<IncidentState["execution"]>(),
   recovery: Annotation<IncidentState["recovery"]>(),
   actionFailure: Annotation<"remediation" | "recovery" | null>(),
-  workflowStatus: Annotation<"waiting_human" | "rejected" | "recovered" | undefined>(),
+  workflowStatus: Annotation<
+    "waiting_human" | "rejected" | "recovered" | "transient" | undefined
+  >(),
   iteration: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
   /** Nodes return a delta; the reducer keeps the running total (SPEC §3.1 costUsd). */
   costUsd: Annotation<number>({ reducer: sum, default: () => 0 }),
@@ -153,6 +156,19 @@ interface InvestigatePayload {
   triageCategory: Category;
   triageReason: string;
   quickEvidence?: Evidence[];
+}
+
+/**
+ * Flapping (SPEC §9 #14): the monitor said Down, but every fixed probe is healthy by the time the
+ * investigation starts. Nothing to diagnose or repair, so the incident closes without any LLM call.
+ */
+export function isTransient(primary: PrimaryEvidence | undefined): boolean {
+  const health = primary?.health;
+  if (!health || health.endpoints.length === 0) return false;
+  return (
+    health.endpoints.every((endpoint) => endpoint.ok) &&
+    Object.values(health.containers).every(Boolean)
+  );
 }
 
 function isGraphState(state: GraphState | InvestigatePayload): state is GraphState {
@@ -220,7 +236,16 @@ export function buildIncidentGraph(deps: GraphDeps) {
     ) =>
     async (state: S): Promise<R> => {
       if (checkStop) await waitIfStopped(state.incidentId);
-      if (!deps.journal) return node(state);
+      const traced = (current: S): Promise<R> =>
+        telemetry().observe(
+          {
+            incidentId: current.incidentId,
+            project: current.project,
+            name: `node:${name}${"specialist" in current ? `:${current.specialist}` : ""}`,
+          },
+          () => node(current),
+        );
+      if (!deps.journal) return traced(state);
       const item = (type: string, data: unknown): TimelineItem => ({
         type,
         at: now().toISOString(),
@@ -245,7 +270,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
       await append([item("node_start", { node: name, ...branch })]);
       const update = await toolJournal.run(
         (data) => append([item("tool_call", { node: name, ...data })]),
-        () => node(state),
+        () => traced(state),
       );
       const events: TimelineItem[] = [];
       const add = (type: string, data: unknown) => events.push(item(type, data));
@@ -765,6 +790,28 @@ export function buildIncidentGraph(deps: GraphDeps) {
     return { workflowStatus: expired ? ("waiting_human" as const) : ("rejected" as const) };
   };
 
+  const transient = async (state: GraphState) => {
+    const manual = state.signal.check === "manual";
+    const sent = await deps.notifier.send(
+      deps.redact(
+        [
+          `🟡 ${PROJECT_DISPLAY_NAMES[state.project]} — incident #${state.incidentId}: ${manual ? "hozir muammo yo‘q" : "vaqtincha uzilish"}`,
+          `Hozirgi tekshiruvlarning hammasi sog‘lom${manual ? "" : " (monitor Down degan edi)"}. Tergov va tuzatish talab qilinmaydi.`,
+          "Xarajat: $0.0000",
+        ].join("\n"),
+      ),
+    );
+    return {
+      workflowStatus: "transient" as const,
+      reportSent: { sentAt: now().toISOString(), messageId: sent.messageId },
+      trace: [
+        event("transient", "closed_as_transient", {
+          endpoints: state.primary?.health?.endpoints.length ?? 0,
+        }),
+      ],
+    };
+  };
+
   const report = async (state: GraphState) => {
     // Refuse to publish anything that does not satisfy the shared IncidentState contract.
     toIncidentState(state);
@@ -827,13 +874,15 @@ export function buildIncidentGraph(deps: GraphDeps) {
     .addNode("execute", gated("execute", execute))
     .addNode("verify_recovery", gated("verify_recovery", verifyRecovery))
     .addNode("close", gated("close", close))
+    .addNode("transient", gated("transient", transient))
     .addNode("report", gated("report", report))
     .addNode("escalate", gated("escalate", escalate))
     .addEdge(START, "intake")
-    .addConditionalEdges("intake", (s) => (s.overBudget ? "escalate" : "triage"), [
-      "escalate",
-      "triage",
-    ])
+    .addConditionalEdges(
+      "intake",
+      (s) => (s.overBudget ? "escalate" : isTransient(s.primary) ? "transient" : "triage"),
+      ["escalate", "transient", "triage"],
+    )
     .addConditionalEdges(
       "triage",
       (s) => (s.overBudget || !s.triageResult ? "escalate" : fanout(s)),
@@ -887,6 +936,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
     )
     .addEdge("close", END)
     .addEdge("report", END)
+    .addEdge("transient", END)
     .addEdge("escalate", END)
     .compile(deps.checkpointer ? { checkpointer: deps.checkpointer } : {});
 }

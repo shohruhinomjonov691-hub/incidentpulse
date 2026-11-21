@@ -4,6 +4,8 @@
 #   a-expired.crt  same names, but it expired in January 2025  (scenario 1)
 #   a-wronghost    valid, but issued for wronghost.example      (scenario 2)
 #   b.crt          valid for b.localhost
+#   b-expired.crt  b.localhost, expired in January 2025        (scenario 13, shared cause)
+#   p.crt          valid for p.localhost (the pm2 toy app)
 # Everything lands in sandbox/runtime/certs (git-ignored). The CA is trusted by the sandbox
 # harness only, via NODE_EXTRA_CA_CERTS; nothing is added to the system trust store.
 set -euo pipefail
@@ -12,7 +14,7 @@ SB="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$SB/runtime/certs"
 mkdir -p "$OUT"
 cd "$OUT"
-if [ -f ca.pem ] && [ -f a.crt ] && [ -f a-expired.crt ] && [ -f a-wronghost.crt ] && [ -f b.crt ]; then exit 0; fi
+if [ -f ca.pem ] && [ -f a.crt ] && [ -f a-expired.crt ] && [ -f a-wronghost.crt ] && [ -f b.crt ] && [ -f b-expired.crt ] && [ -f p.crt ]; then exit 0; fi
 
 stamp() { # $1 = offset like -1d / +25d, prints YYYYMMDDHHMMSSZ in UTC (BSD or GNU date)
   date -u -v"$1" +%Y%m%d%H%M%SZ 2>/dev/null || date -u -d "${1/d/ day}" +%Y%m%d%H%M%SZ
@@ -57,4 +59,6 @@ issue a            a.localhost          "DNS:a.localhost"          "$NOT_BEFORE"
 issue a-expired    a.localhost          "DNS:a.localhost"          20250101000000Z 20250131000000Z
 issue a-wronghost  wronghost.example    "DNS:wronghost.example"    "$NOT_BEFORE" "$NOT_AFTER"
 issue b            b.localhost          "DNS:b.localhost"          "$NOT_BEFORE" "$NOT_AFTER"
+issue b-expired    b.localhost          "DNS:b.localhost"          20250101000000Z 20250131000000Z
+issue p            p.localhost          "DNS:p.localhost"          "$NOT_BEFORE" "$NOT_AFTER"
 echo "sandbox certificates written to $OUT"

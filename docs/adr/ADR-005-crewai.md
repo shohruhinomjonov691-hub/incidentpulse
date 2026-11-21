@@ -1,27 +1,28 @@
 # ADR-005: CrewAI for the postmortem crew
 
-- **Status:** Proposed (stub). Fill in at the start of the phase that adopts it.
-- **Date:** 2026-11-21
+- **Status:** Accepted
+- **Date:** 2026-11-21 (written at the end of Phase 6, from what was built)
 - **Spec reference:** [docs/SPEC.md](../SPEC.md) §2, row ADR-005
 
 ## Context
 
-**Postmortem crew**: Researcher → Reviewer → Writer.
+Each closed incident should get a short postmortem (summary, timeline, root cause, fix, prevention) that does not invent facts.
 
 ## Decision
 
-Use the framework listed in SPEC §2 for this role. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
+`services/postmortem-crew` is a FastAPI service running a sequential CrewAI crew: Researcher (extracts a factual chronology and evidence ids from the incident record) → Reviewer (finds gaps, separates confirmed from inferred claims) → Writer (writes the markdown postmortem). The orchestrator calls it over HTTP with a shared secret and books the returned token usage against the weekly budget.
 
-- `crewai` 1.15.44 (requires Python >=3.10,<3.14, so the service stays on 3.12)
+Pinned version(s) (see [docs/VERSIONS.md](../VERSIONS.md)): `crewai` 1.15.44 (Python 3.12, FastAPI service)
 
 ## Why this and not another
 
-Role/task-based sequential crews fit document production well.
+Role/task-based sequential crews map directly onto "research, check, write". The Reviewer step is what keeps "Confirmed" and "Hypothesis (not fully proven by the record)" separate in the output.
 
 ## Alternatives considered
 
-TODO (fill in when the phase starts). Starting points: A plain LLM chain with a template; Microsoft Agent Framework sequential workflow.
+- **One templated LLM call.** Cheaper and probably enough for a 2-3k character document; the crew is partly a deliberate framework choice (SPEC §2) and I say so.
+- **Reuse Microsoft Agent Framework** (ADR-004). Would drop a dependency, at the cost of mixing two different jobs in one service.
 
 ## Consequences
 
-TODO.
+A heavy dependency tree and a second Python service. Measured cost in the sandbox: about $0.004 per postmortem with a small model.

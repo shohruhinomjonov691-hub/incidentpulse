@@ -18,7 +18,9 @@ export function createRecoveryCheck(probe: ReturnType<typeof createPrimaryProbe>
           const container =
             state.remediation?.runbookId === "docker_restart"
               ? state.remediation.params.service
-              : undefined;
+              : state.remediation?.runbookId === "pm2_restart" && state.remediation.params.app
+                ? `pm2:${state.remediation.params.app}`
+                : undefined;
           const httpOk =
             health.endpoints.length > 0 && health.endpoints.every((target) => target.ok);
           const containerOk = Boolean(container && health.containers[container]);

@@ -1,0 +1,44 @@
+{
+  "model": "gpt-5.4-mini",
+  "debateModel": "gpt-5.4-nano",
+  "postmortemModel": "gpt-5.4-nano",
+  "totalCostUsd": 0.011016,
+  "results": [
+    {
+      "scenario": 1,
+      "incidentId": "sandbox-ipsb4d771e1963-1",
+      "got": "tls",
+      "runbook": "certbot_renew",
+      "approval": "approved",
+      "approvedBy": "web:admin",
+      "execution": true,
+      "recovery": {
+        "ok": true,
+        "check": "https://a.localhost:18443/",
+        "at": "2026-11-21T05:04:41.129Z"
+      },
+      "investigationCostUsd": 0.0066241,
+      "incidentCostUsd": 0.011016100000000001,
+      "audit": ["approved", "execution_claimed", "execution_finished"],
+      "eventKinds": [
+        "node_start",
+        "tool_call",
+        "node_end",
+        "hypotheses",
+        "debate",
+        "verdict",
+        "approval",
+        "execution",
+        "recovery",
+        "postmortem_ready",
+        "chat_cost"
+      ],
+      "postmortemChars": 3111,
+      "postmortemMarkdown": "# Postmortem: TLS certificate expiry on `a.localhost` caused HTTPS failure (sandbox)\n\n## Summary\nA TLS-related incident occurred on `https://a.localhost:18443/` for the `gotrip` project. HTTPS probing failed with `CERT_HAS_EXPIRED`, and TLS inspection reported that the presented certificate was expired (`notAfter=2025-01-31`). The incident was recovered after deploying a “Sandbox CA leaf” and running `certbot_renew` (dry run) consistent with restoring TLS verification for the endpoint. The recovery check completed successfully.\n\n## Timeline\n- **2026-11-21T05:04:16.101Z** — Signal recorded: `https` check.\n- **2026-11-21T05:04:25.927Z** — Hypotheses stage started.\n- **2026-11-21T05:04:31.556Z** — Debate stage completed.\n- **2026-11-21T05:04:31.556Z** — Verdict reached (primary hypothesis selected: **h1**, confidence in record: **0.74**).\n- **2026-11-21T05:04:33.545Z** — Approval (web:admin).\n- **2026-11-21T05:04:40.559Z** — Approval (additional approval entry recorded).\n- **2026-11-21T05:04:40.680Z** — Execution: `Sandbox CA leaf deployed`.\n- **2026-11-21T05:04:41.129Z** — Recovery check performed: `https://a.localhost:18443/` (ok=true).\n\n## Root cause\n**Confirmed:**  \n- The endpoint’s TLS certificate was **expired**, as indicated by both:\n  - `http_probe` error: `CERT_HAS_EXPIRED`\n  - `tls_inspect` results: `expired=true`, `error=CERT_HAS_EXPIRED`, and `notAfter=2025-01-31`, with `subject=a.localhost`.\n\n**Additional note (hypothesis not fully ruled out):**  \n- A dissent note indicated `tls_inspect` also reported **`chainValid=false`**, suggesting a potential **untrusted certificate chain** issue in addition to (or separate from) expiration.  \n- However, the record also shows that recovery succeeded after the “Sandbox CA leaf” deployment and a `certbot_renew` dry run described as passing TLS verification for a “Sandbox CA candidate,” so expiration is the most directly confirmed primary failure mode based on the evidence presented.\n\n**Most likely primary factor (selected hypothesis):**  \n- **h1:** The certificate for `a.localhost` expired (confidence in record: **0.99**; verdict confidence: **0.74**).\n\n## Fix\n- **Execution:** Deployed a new **“Sandbox CA leaf”**.\n- **Remediation action:** Ran the `certbot_renew` runbook (dry run output: **“Sandbox CA candidate passed TLS verification”**).\n- **Recovery validation:** Confirmed via successful HTTPS recovery check (`ok=true`) for `https://a.localhost:18443/`.\n\n## Prevention\n- **Recommendation 1:** Add an automated preflight check that monitors certificate validity periods (e.g., `notAfter`) for internal endpoints like `a.localhost` and alerts before expiry.\n- **Recommendation 2:** Extend TLS validation to include chain trust assessment (e.g., track both `expired` and `chainValid`) so issues like `chainValid=false` are detected even when expiration is also present.\n- **Recommendation 3:** Record and verify which leaf certificate is served after renewal/rotation by re-running `tls_inspect` and comparing the reported `notAfter` and issuer/chain indicators.\n\n## Cost\n\nInvestigation: $0.006624 · Postmortem: $0.004189\n",
+      "chat": {
+        "status": 200,
+        "answer": "The evidence indicating the root cause is **the expired TLS certificate**:\n\n- **p2**: `tls_inspect(a.localhost:18443)` shows `chainValid=false` and `expired=true` with `error=CERT_HAS_EXPIRED` and `notAfter=2025-01-31`, issuer `IncidentPulse Sandbox CA`.\n- **p1** supports the same by showing `http_probe(...)` completed with `error=CERT_HAS_EXPIRED` (`CERT_HAS_EXPIRED`)."
+      }
+    }
+  ]
+}

@@ -18,6 +18,7 @@ services:
       # Empty value (A_DATABASE_URL=) => the app refuses to start: scenario 4 (crash loop, bad env).
       DATABASE_URL: ${A_DATABASE_URL-postgres://toy:toy@db.internal:5432/toy}
       # "injection" => the app returns 500 and its logs carry a prompt-injection payload: scenario 12.
+      # injection (12) | badcommit (8) | slow (9) | disk (10, simulated)
       FAULT: ${A_FAULT:-}
     restart: unless-stopped
 
@@ -53,4 +54,35 @@ services:
       - ./sandbox/runtime/b/certs:/certs:ro
     ports:
       - "127.0.0.1:18444:443"
+    restart: unless-stopped
+
+  # ---- toy app "p": node app supervised by pm2 inside the container (scenario 11: the pm2 app stops, the container stays up).
+  p-app:
+    build: ./sandbox/pm2
+    image: ipsb-pm2-app:local
+    container_name: ipsb-p-app
+    volumes:
+      - ./sandbox/app:/app:ro
+    restart: unless-stopped
+
+  p-nginx:
+    image: nginx:1.31-alpine
+    container_name: ipsb-p-nginx
+    volumes:
+      - ./sandbox/runtime/p/conf.d:/etc/nginx/conf.d:ro
+      - ./sandbox/runtime/p/certs:/certs:ro
+    ports:
+      - "127.0.0.1:18445:443"
+    restart: unless-stopped
+
+  # ---- scenario 8: fake CodeTrail + GitHub commits API (static data, loopback only).
+  mock-codetrail:
+    image: node:24-alpine
+    container_name: ipsb-mock-codetrail
+    working_dir: /app
+    command: ["node", "server.js"]
+    volumes:
+      - ./sandbox/mock-codetrail:/app:ro
+    ports:
+      - "127.0.0.1:18090:3000"
     restart: unless-stopped

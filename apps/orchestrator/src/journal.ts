@@ -8,6 +8,7 @@ export type IncidentStatus =
   | "waiting_human"
   | "rejected"
   | "recovered"
+  | "transient"
   | "escalated";
 
 export type TimelineItem = { type: string; at: string; data: unknown };
@@ -69,7 +70,9 @@ export function createJournal(pool: Pool) {
         );
         if (input.snapshot && !current.rows[0]?.closed_at) {
           const { state, status, approvalId } = input.snapshot;
-          const closed = ["recovered", "escalated", "rejected", "reported"].includes(status);
+          const closed = ["recovered", "escalated", "rejected", "reported", "transient"].includes(
+            status,
+          );
           await client.query(
             `UPDATE incidentpulse_incidents SET state=$2,status=$3,approval_id=$4,
              closed_at=CASE WHEN $5 THEN $6::timestamptz ELSE NULL END WHERE id=$1`,

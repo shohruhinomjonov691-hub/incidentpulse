@@ -22,7 +22,7 @@ TypeScript pins live in the `catalog` / `catalogs.frameworks` sections of `pnpm-
 | httpx2 | 2.16.2 | Starlette's TestClient now deprecates `httpx` in favour of `httpx2` |
 | jsonschema | 4.26.0 | contract tests in the Python services |
 | PostgreSQL / Redis | `postgres:18.7-alpine` / `redis:8.8-alpine` | 19.0 exists but is brand new; 18 chosen |
-| Sandbox images | `nginx:1.31-alpine`, `node:24-alpine` | `compose.sandbox.yaml` (local fault-injection only) |
+| Sandbox images | `nginx:1.31-alpine`, `node:24-alpine`, `pm2` 7.1.2 (installed in `sandbox/pm2/Dockerfile`) | `compose.sandbox.yaml` (local fault-injection only) |
 
 ## Frameworks (adopted in later phases)
 
@@ -34,11 +34,11 @@ TypeScript pins live in the `catalog` / `catalogs.frameworks` sections of `pnpm-
 | 004 | `agent-framework-core` (**accepted** 2026-11-21) | 1.26.0 |
 | 005 | `crewai` | 1.15.44 |
 | 006 | `ai` / `next` | 7.0.178 / 16.4.6 |
-| 007 | `@langfuse/client`, `tracing`, `otel` / Python `langfuse` | 6.1.1 / 5.2.0 |
-| 008 | `drizzle-orm` | 0.45.4 |
+| 007 | `@langfuse/otel`, `tracing`, `core` (adopted; `client` and Python `langfuse` not used) | 6.1.1 |
+| 008 | `drizzle-orm` (**not adopted**, see ADR-008; plain `pg` 8.23.1 is used) | 0.45.4 |
 | 009 | `bullmq` | 6.7.8 |
 | 010 | `grammy` | 1.46.0 |
-| 011 | `promptfoo` | 0.126.0 |
+| 011 | `promptfoo` (**not adopted**, see ADR-011) | 0.126.0 |
 | — | `fastify` (intake, SPEC §3) | 5.12.8 |
 | 001 | `@langchain/core` (peer of LangGraph) | 1.5.0 |
 | 009 | `ioredis` (peer of BullMQ) | 5.11.1 |

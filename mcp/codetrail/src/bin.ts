@@ -27,6 +27,7 @@ const server = createCodetrailServer({
   apiKey: process.env.CODETRAIL_API_KEY,
   projectIds: jsonMap("CODETRAIL_PROJECT_IDS_JSON"),
   githubToken: process.env.GITHUB_READONLY_TOKEN,
+  githubApiBase: process.env.GITHUB_API_BASE || undefined,
   repos: jsonMap("PROJECT_REPOS_JSON"),
   redact: createRedactor({ secrets: collectSecrets(process.env) }),
 });

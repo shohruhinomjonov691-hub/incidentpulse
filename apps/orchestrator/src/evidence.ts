@@ -5,6 +5,7 @@ import {
   DockerLogsResultSchema,
   DockerPsResultSchema,
   HttpProbeResultSchema,
+  Pm2ListResultSchema,
   TlsInspectResultSchema,
 } from "@incidentpulse/mcp-infra/schemas";
 import type { Redactor } from "@incidentpulse/redact";
@@ -87,7 +88,7 @@ function digestDockerPs(r: ReturnType<typeof DockerPsResultSchema.parse>): strin
 }
 
 const INTERESTING =
-  /error|fatal|emerg|crit|exception|refused|fail|panic|denied|invalid|unexpected|cannot|can't|not set|missing|timed out|killed/i;
+  /error|fatal|emerg|crit|exception|refused|fail|panic|denied|invalid|unexpected|cannot|can't|not set|missing|timed out|killed|enospc|no space left|out of memory|oom/i;
 
 function digestDockerLogs(r: ReturnType<typeof DockerLogsResultSchema.parse>): string {
   const head = `docker_logs(${r.container})`;
@@ -99,6 +100,17 @@ function digestDockerLogs(r: ReturnType<typeof DockerLogsResultSchema.parse>): s
   const picked = [...new Set(interesting.length > 0 ? interesting : real)].slice(-4);
   const note = removed > 0 ? ` [${removed} line(s) removed by injection guardrail]` : "";
   return `${head}: ${r.lines.length} lines${note}${picked.length > 0 ? `; key lines: ${picked.map((l) => `«${l.slice(0, 220)}»`).join(" ")}` : ""}`;
+}
+
+function digestPm2(r: ReturnType<typeof Pm2ListResultSchema.parse>): string {
+  if (r.error) return `pm2_list: error=${r.error}`;
+  if (r.apps.length === 0) return "pm2_list: no matching apps";
+  return `pm2_list: ${r.apps
+    .map(
+      (a) =>
+        `${a.name} ${a.status} (restarts=${a.restarts}${a.uptimeSeconds === undefined ? "" : `, up ${a.uptimeSeconds}s`})`,
+    )
+    .join("; ")}`;
 }
 
 function digestCodetrail(tool: string, r: ReturnType<typeof CodetrailResultSchema.parse>): string {
@@ -151,6 +163,9 @@ export function buildEvidence(args: {
       case "docker_logs":
         digest = digestDockerLogs(parse(DockerLogsResultSchema));
         break;
+      case "pm2_list":
+        digest = digestPm2(parse(Pm2ListResultSchema));
+        break;
       case "codetrail_search":
       case "codetrail_explain":
         digest = digestCodetrail(args.tool, parse(CodetrailResultSchema));
@@ -181,7 +196,8 @@ export function evidenceForModel(items: readonly Evidence[]): Evidence[] {
   return items.filter((item) => {
     const fact = item.excerpt
       .replace(/ latency=\d+(?:\.\d+)?ms\b/, "")
-      .replace(/(notAfter=\d{4}-\d{2}-\d{2}) \(-?\d+d\)/, "$1");
+      .replace(/(notAfter=\d{4}-\d{2}-\d{2}) \(-?\d+d\)/, "$1")
+      .replace(/, up \d+s\)/g, ")");
     const key = JSON.stringify([item.tool, fact]);
     if (seen.has(key)) return false;
     seen.add(key);

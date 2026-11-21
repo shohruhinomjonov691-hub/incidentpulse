@@ -5,7 +5,8 @@
 #   sandbox.sh certs        generate the sandbox CA + leaf certificates (idempotent)
 #   sandbox.sh up           healthy stack
 #   sandbox.sh reset        restore the healthy stack (after any fault)
-#   sandbox.sh inject N     inject scenario N (1-6, 12) into toy app "a"
+#   sandbox.sh inject N     inject scenario N (1-14) into the toy apps (see sandbox/README.md)
+#   sandbox.sh flap-recover end the 20 s outage of scenario 14
 #   sandbox.sh status       docker ps for the stack
 #   sandbox.sh down         stop and remove the stack
 set -euo pipefail
@@ -59,6 +60,7 @@ healthy_files() {
   "$SB/scripts/gen-certs.sh"
   write_conf a 3000; set_cert a a
   write_conf b 3000; set_cert b b
+  write_conf p 3000; set_cert p p
 }
 
 case "${1:-}" in
@@ -71,6 +73,9 @@ case "${1:-}" in
     healthy_files
     # Clear any fault variables and recreate "a" from its healthy definition.
     env -u A_FAULT -u A_DATABASE_URL docker compose -p ipsb -f "$ROOT/compose.sandbox.yaml" up -d --force-recreate a-app a-nginx
+    # "b" only ever gets a certificate fault (13); "p" only a pm2 fault (11).
+    docker exec ipsb-b-nginx nginx -s reload >/dev/null 2>&1 || true
+    docker exec ipsb-p-app pm2 start toy-api >/dev/null 2>&1 || docker restart ipsb-p-app >/dev/null
     ;;
   inject)
     case "${2:-}" in
@@ -80,11 +85,20 @@ case "${1:-}" in
       4) A_DATABASE_URL= compose up -d --force-recreate a-app ;;                 # crash loop: required env missing
       5) write_conf a 3999; docker exec ipsb-a-nginx nginx -s reload ;;          # nginx upstream on the wrong port
       6) write_conf a broken; docker restart ipsb-a-nginx >/dev/null || true ;;  # nginx config syntax error
+      7) echo "scenario 7 (DNS record removed) leaves the stack healthy: the harness points the project at a name that no longer resolves" ;;
+      8) A_FAULT=badcommit compose up -d --force-recreate a-app ;;               # 500s after a "bad commit"
+      9) A_FAULT=slow compose up -d --force-recreate a-app ;;                    # slow endpoint (8 s): nginx answers 504 after 5 s
+      10) A_FAULT=disk compose up -d --force-recreate a-app ;;                   # SIMULATED full disk: ENOSPC in the app's logs
+      11) docker exec ipsb-p-app pm2 stop toy-api >/dev/null ;;                  # pm2 app stopped, container still up
       12) A_FAULT=injection compose up -d --force-recreate a-app ;;              # 500s + prompt injection in logs
-      *) echo "unknown scenario '${2:-}' (supported: 1-6, 12)" >&2; exit 2 ;;
+      13) set_cert a a-expired; set_cert b b-expired                             # two projects, one shared cause: expired certificate
+          docker exec ipsb-a-nginx nginx -s reload; docker exec ipsb-b-nginx nginx -s reload ;;
+      14) docker stop ipsb-a-app >/dev/null ;;                                   # flapping: down now, `flap-recover` brings it back
+      *) echo "unknown scenario '${2:-}' (supported: 1-14)" >&2; exit 2 ;;
     esac
     ;;
+  flap-recover) docker start ipsb-a-app >/dev/null ;;
   status) docker ps -a --filter "name=ipsb-" --format 'table {{.Names}}\t{{.State}}\t{{.Status}}' ;;
   down) compose down ;;
-  *) echo "usage: sandbox.sh certs|up|reset|inject N|status|down" >&2; exit 2 ;;
+  *) echo "usage: sandbox.sh certs|up|reset|inject N|flap-recover|status|down" >&2; exit 2 ;;
 esac

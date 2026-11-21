@@ -6,6 +6,7 @@ type MCPServerStdioOptions = ConstructorParameters<typeof MCPServerStdio>[0];
 
 import { buildEvidence } from "./evidence.ts";
 import { detectInjection, guardToolOutput, type InjectionMode } from "./guardrails.ts";
+import { telemetry } from "./observability.ts";
 
 /** One tool call as seen by the guarded server. `rawText` is already scrubbed (strip mode). */
 export interface ToolCallRecord {
@@ -60,6 +61,7 @@ export class GuardedMcpServer extends MCPServerStdio {
   override async callTool(
     ...args: Parameters<MCPServerStdio["callTool"]>
   ): ReturnType<MCPServerStdio["callTool"]> {
+    const callStarted = new Date();
     const content = await super.callTool(...args);
     const raw = textOf(content);
     const guarded = guardToolOutput(raw, {
@@ -99,6 +101,25 @@ export class GuardedMcpServer extends MCPServerStdio {
       flaggedCount: guarded.flaggedCount,
       blocked,
     });
+    const tracer = telemetry();
+    if (tracer.enabled) {
+      tracer.tool({
+        name: args[0],
+        source: this.guard.source,
+        input: args[1],
+        // The scrubbed digest, never the raw tool output.
+        output: buildEvidence({
+          id: "",
+          tool: args[0],
+          output: guarded.scrubbedText,
+          at: new Date(),
+          redact: this.guard.redact,
+        }).excerpt,
+        blocked,
+        startTime: callStarted,
+        endTime: new Date(),
+      });
+    }
     const record = toolJournal.getStore();
     if (record)
       await record({

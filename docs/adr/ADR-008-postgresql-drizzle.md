@@ -1,28 +1,28 @@
-# ADR-008: PostgreSQL + Drizzle ORM for durable state
+# ADR-008: PostgreSQL for durable state (Drizzle not adopted)
 
-- **Status:** Proposed (stub). Fill in at the start of the phase that adopts it.
-- **Date:** 2026-11-21
+- **Status:** Accepted with a deviation from the spec
+- **Date:** 2026-11-21 (written at the end of Phase 6, from what was built)
 - **Spec reference:** [docs/SPEC.md](../SPEC.md) §2, row ADR-008
 
 ## Context
 
-Incidents, evidence, approvals, LangGraph checkpoints (PostgresSaver), eval runs.
+Incidents, the event journal, approvals with their audit log and the LangGraph checkpoints must survive restarts, and approval tokens must be consumable exactly once.
 
 ## Decision
 
-Use the framework listed in SPEC §2 for this role. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
+PostgreSQL holds the LangGraph checkpoints (`PostgresSaver`), the incident journal and timeline events, the approval store with single-use tokens and an append-only action audit, and postmortems. Access is plain `pg` with hand-written SQL in small modules.
 
-- PostgreSQL 18 (`postgres:18.7-alpine` in compose.yaml)
-- `drizzle-orm` 0.45.4
+Pinned version(s) (see [docs/VERSIONS.md](../VERSIONS.md)): `postgres:18.7-alpine`, `pg` 8.23.1
 
 ## Why this and not another
 
-Durable checkpointer; relational audit log.
+Postgres gives the transactions and `FOR UPDATE`/unique-constraint semantics that "single use" and "one execution claim" need.
 
 ## Alternatives considered
 
-TODO (fill in when the phase starts). Starting points: SQLite; Prisma.
+- **Drizzle ORM** (named in SPEC §2). Not adopted: the schema is a handful of tables, the queries are few and security-critical, and explicit SQL made the locking visible. It would still be a reasonable change if the schema grows.
+- **SQLite.** No shared access between the worker and the web app.
 
 ## Consequences
 
-TODO.
+No generated types for rows: each module validates what it reads. Migrations are idempotent `CREATE TABLE IF NOT EXISTS` statements run at start-up, which is enough for now and not a migration framework.

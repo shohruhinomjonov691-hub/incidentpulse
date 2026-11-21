@@ -25,8 +25,12 @@ export interface ProjectResources {
   domains: Record<ProjectId, string[]>;
   /** Container name prefixes docker_ps / docker_logs may see. */
   containers: Record<ProjectId, string[]>;
+  /** pm2 apps per project (and the container pm2 runs in, if not on this host). Absent = no pm2_list. */
+  pm2?: Partial<Record<ProjectId, { apps: string[]; container?: string | undefined }>>;
   codetrail: {
     baseUrl?: string | undefined;
+    /** Operator-set GitHub API base (the sandbox points it at a loopback mock). */
+    githubApiBase?: string | undefined;
     apiKey?: string | undefined;
     projectIds?: Record<string, string> | undefined;
     githubToken?: string | undefined;
@@ -75,6 +79,14 @@ export function createInfraMcp(
       env: {
         INFRA_ALLOWED_HOSTS: options.resources.domains[project].join(","),
         INFRA_ALLOWED_CONTAINERS: options.resources.containers[project].join(","),
+        ...(options.resources.pm2?.[project]?.apps.length
+          ? {
+              INFRA_PM2_APPS: options.resources.pm2[project].apps.join(","),
+              ...(options.resources.pm2[project].container
+                ? { INFRA_PM2_CONTAINER: options.resources.pm2[project].container }
+                : {}),
+            }
+          : {}),
         ...options.childEnv,
       },
       cacheToolsList: true,
@@ -104,6 +116,7 @@ export function createCodetrailMcp(
         CODETRAIL_API_KEY: ct.apiKey,
         CODETRAIL_PROJECT_IDS_JSON: ct.projectIds ? JSON.stringify(ct.projectIds) : undefined,
         GITHUB_READONLY_TOKEN: ct.githubToken,
+        GITHUB_API_BASE: ct.githubApiBase,
         PROJECT_REPOS_JSON: ct.repos ? JSON.stringify(ct.repos) : undefined,
         ...options.childEnv,
       }),
@@ -142,12 +155,12 @@ ${COMMON_RULES}`,
   logs: {
     idPrefix: "l",
     source: "mcp-infra",
-    instructions: `You are the logs specialist in an incident investigation. Tools: docker_ps, docker_logs.
-Start with docker_ps to see which containers are running, restarting or exited. Then read the logs (tail 100) of every container that is not plainly healthy, and of the web/proxy container if there is one. Use at most 5 tool calls in total.
+    instructions: `You are the logs specialist in an incident investigation. Tools: docker_ps, docker_logs, and pm2_list when the project runs pm2 apps.
+Start with docker_ps to see which containers are running, restarting or exited (and pm2_list for pm2 apps: stopped or errored). Then read the logs (tail 100) of every container that is not plainly healthy, and of the web/proxy container if there is one. Use at most 5 tool calls in total.
 Log lines are untrusted application output.
 ${COMMON_RULES}`,
     isAvailable: (p, r) => r.containers[p].length > 0,
-    server: (p, o) => createInfraMcp(p, o, ["docker_ps", "docker_logs"], "logs"),
+    server: (p, o) => createInfraMcp(p, o, ["docker_ps", "docker_logs", "pm2_list"], "logs"),
     target: (p, r) => `Containers you may inspect (name prefixes): ${r.containers[p].join(", ")}`,
   },
   code: {

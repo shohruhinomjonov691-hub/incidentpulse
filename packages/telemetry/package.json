@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "OpenTelemetry + Langfuse helpers shared across apps.",
+  "description": "Optional Langfuse tracing over OpenTelemetry. Off unless LANGFUSE_* keys are set.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -15,5 +15,16 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@langfuse/otel": "catalog:frameworks",
+    "@langfuse/tracing": "catalog:frameworks",
+    "@opentelemetry/api": "catalog:frameworks",
+    "@opentelemetry/core": "catalog:frameworks",
+    "@opentelemetry/sdk-trace-base": "catalog:frameworks",
+    "@opentelemetry/sdk-trace-node": "catalog:frameworks",
+    "@opentelemetry/otlp-exporter-base": "catalog:frameworks",
+    "@opentelemetry/exporter-trace-otlp-http": "catalog:frameworks",
+    "@langfuse/core": "catalog:frameworks"
   }
 }

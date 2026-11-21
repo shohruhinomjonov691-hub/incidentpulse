@@ -1,28 +1,28 @@
 # ADR-006: Vercel AI SDK + Next.js for the live UI
 
-- **Status:** Proposed (stub). Fill in at the start of the phase that adopts it.
-- **Date:** 2026-11-21
+- **Status:** Accepted (narrower use than the spec)
+- **Date:** 2026-11-21 (written at the end of Phase 6, from what was built)
 - **Spec reference:** [docs/SPEC.md](../SPEC.md) §2, row ADR-006
 
 ## Context
 
-Live incident timeline streaming, chat with an incident ("why did you conclude X?"), approval UI.
+A person needs to watch an incident as it happens, ask "why did you conclude X?" and press Approve from a phone.
 
 ## Decision
 
-Use the framework listed in SPEC §2 for this role. Pinned version(s) (verified 2026-11-21, see [docs/VERSIONS.md](../VERSIONS.md)):
+`apps/web` is a Next.js app behind a single admin password (signed httpOnly cookie, rate-limited). The incident timeline is a server-sent-events stream over the Postgres event journal. "Ask this incident" uses the AI SDK `streamText` with that one incident's evidence only. Approve/Reject use the same signed token as the Telegram buttons.
 
-- `ai` 7.0.178
-- `next` 16.4.6
+Pinned version(s) (see [docs/VERSIONS.md](../VERSIONS.md)): `ai` 7.0.178, `@ai-sdk/openai` 4.0.122, `next` 16.4.6
 
 ## Why this and not another
 
-Streaming UI primitives; the same tool-call events render as a live timeline.
+Next.js gives server components, route handlers and SSE in one place. The AI SDK's `streamText` is the small, well-tested part for the chat.
 
 ## Alternatives considered
 
-TODO (fill in when the phase starts). Starting points: Plain SSE + React; assistant-ui.
+- **Plain React + Express.** More glue for the same result.
+- **Telegram only.** Fine for alerts; poor for reading a 15-step timeline.
 
 ## Consequences
 
-TODO.
+Honest note: the live timeline is plain SSE over the journal, not AI-SDK streaming. The AI SDK is used for the chat only. The page works at 375 px and in dark mode (screenshots in `docs/screenshots/`).

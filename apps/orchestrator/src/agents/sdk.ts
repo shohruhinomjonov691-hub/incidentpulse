@@ -1,6 +1,7 @@
 import type { ModelPricing } from "@incidentpulse/config";
 import { AgentsError, type Model, setDefaultOpenAIKey, setTracingDisabled } from "@openai/agents";
 import { costOf, sumUsage } from "../cost.ts";
+import { telemetry } from "../observability.ts";
 import type { WeeklyBudget } from "../weekly-budget.ts";
 
 /**
@@ -36,6 +37,8 @@ export function limitModelSpend(
     now?: () => Date;
     strictBudget?: boolean;
     reserve?(at: Date, usd: number): Promise<boolean>;
+    /** Model name shown on Langfuse generations (the Model object does not expose one). */
+    modelName?: string;
   },
 ): Model {
   const now = options.now ?? (() => new Date());
@@ -59,8 +62,25 @@ export function limitModelSpend(
             if (!(await options.reserve(at, reserved))) throw new WeeklyBudgetExhausted(spent);
           } else if (spent + upperUsd > options.limitUsd) throw new WeeklyBudgetExhausted(spent);
         }
+        const callStarted = new Date();
         const response = await model.getResponse(request);
         const cost = costOf(sumUsage([response.usage]), options.pricing);
+        const tracer = telemetry();
+        if (tracer.enabled) {
+          tracer.generation({
+            name: "llm",
+            model: options.modelName ?? "unknown",
+            input: request.input,
+            output: response.output,
+            usage: {
+              inputTokens: response.usage.inputTokens ?? 0,
+              outputTokens: response.usage.outputTokens ?? 0,
+            },
+            costUsd: cost,
+            startTime: callStarted,
+            endTime: new Date(),
+          });
+        }
         if (reserved !== undefined && reserved > cost)
           await options.budget.releaseUsd(reserved - cost, at);
         else await options.budget.addUsd(cost - (reserved ?? 0), at);
