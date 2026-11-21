@@ -1,0 +1,44 @@
+{
+  "model": "gpt-5.4-mini",
+  "debateModel": "gpt-5.4-nano",
+  "postmortemModel": "gpt-5.4-nano",
+  "totalCostUsd": 0.014448,
+  "results": [
+    {
+      "scenario": 1,
+      "incidentId": "sandbox-ipsb7324a81dad-1",
+      "got": "tls",
+      "runbook": "certbot_renew",
+      "approval": "approved",
+      "approvedBy": "web:admin",
+      "execution": true,
+      "recovery": {
+        "ok": true,
+        "check": "https://a.localhost:18443/",
+        "at": "2026-11-21T00:46:17.969Z"
+      },
+      "investigationCostUsd": 0.00990295,
+      "incidentCostUsd": 0.01444995,
+      "audit": ["approved", "execution_claimed", "execution_finished"],
+      "eventKinds": [
+        "node_start",
+        "tool_call",
+        "node_end",
+        "hypotheses",
+        "debate",
+        "verdict",
+        "approval",
+        "execution",
+        "recovery",
+        "postmortem_ready",
+        "chat_cost"
+      ],
+      "postmortemChars": 2734,
+      "postmortemMarkdown": "# Postmortem: TLS certificate expired for `a.localhost:18443` (gotrip)\n\n## Summary\nOn `gotrip`, HTTPS requests to `https://a.localhost:18443/` failed because the server presented an expired certificate. TLS inspection showed `expired=true` with error `CERT_HAS_EXPIRED` and `notAfter=2025-01-31` while the hostname still matched (`hostnameMatch=true`). The issue was resolved after deploying a “Sandbox CA leaf” certificate, and the recovery HTTPS check succeeded.\n\n## Timeline\n- **2026-11-21T00:45:50.460Z** — Signal captured: `https`\n- **2026-11-21T00:46:06.268Z** — Hypotheses recorded\n- **2026-11-21T00:46:12.488Z** — Debate\n- **2026-11-21T00:46:12.488Z** — Verdict: expired certificate identified as primary issue (hypothesis **h1**)\n- **2026-11-21T00:46:14.378Z** — Approval granted (web:admin)\n- **2026-11-21T00:46:17.425Z** — Approval recorded\n- **2026-11-21T00:46:17.576Z** — Execution completed successfully: **“Sandbox CA leaf deployed”**\n- **2026-11-21T00:46:17.969Z** — Recovery check completed successfully (`https://a.localhost:18443/`)\n\n## Root cause\n**Confirmed:** The HTTPS endpoint presented a certificate that was **expired** (`CERT_HAS_EXPIRED`, `expired=true`, `notAfter=2025-01-31`) for **`a.localhost`**. HTTPS probes failed accordingly.\n\n**Hypothesis (not fully proven by the record):** The certificate for `a.localhost` had simply expired and was not renewed in time (**h1**, confidence 0.99).  \n- The record does not specify *which renewal path/CA process* should have been used, nor *why* the existing certificate reached expiration (e.g., whether renewal was not triggered, misconfigured, or the wrong certificate was installed).\n\nA dissenting view (**h2**) notes that HTTPS verification might fail for multiple reasons, but the recorded TLS results explicitly identify `CERT_HAS_EXPIRED`, which is treated as the primary driver in the verdict.\n\n## Fix\n- **Deployed** a new certificate artifact: **“Sandbox CA leaf deployed”** (execution success).\n- **Validated** recovery by successfully completing an HTTPS check: `https://a.localhost:18443/` (`ok=true`).\n\n## Prevention\n- **Recommendation 1:** Add automated monitoring/alerting that tracks certificate expiration dates for the specific `a.localhost` endpoint and triggers alerts well before `notAfter`.\n- **Recommendation 2:** Document and verify the certificate renewal/rotation workflow for `a.localhost` (including which CA and renewal command/path are expected to update the active nginx/reverse-proxy certificate files).\n- **Recommendation 3:** Ensure endpoint-level TLS validation is part of CI/CD or scheduled checks (e.g., verify `CERT_HAS_EXPIRED` is never present before promotion).\n\n## Cost\n\nInvestigation: $0.009903 · Postmortem: $0.004271\n",
+      "chat": {
+        "status": 200,
+        "answer": "The evidence indicating the root cause is that the server’s TLS certificate has expired:\n\n- **p1**: `http_probe` fails with `CERT_HAS_EXPIRED` for `https://a.localhost:18443/`.\n- **p2**: `tls_inspect` shows `expired=true` and `error=CERT_HAS_EXPIRED`, with `notAfter=2025-01-31` and issuer `IncidentPulse Sandbox CA`.\n- **i2**: Another `tls_inspect` result confirming `chainValid=false`, `expired=tru"
+      }
+    }
+  ]
+}

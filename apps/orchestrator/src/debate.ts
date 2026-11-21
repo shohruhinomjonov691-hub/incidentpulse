@@ -4,7 +4,14 @@ import {
   type Evidence,
   type Hypothesis,
 } from "@incidentpulse/schemas";
+import { z } from "zod";
 import { evidenceForModel } from "./evidence.ts";
+
+const Transcript = z
+  .array(
+    z.object({ role: z.enum(["Investigator", "Skeptic", "Judge"]), text: z.string().max(1500) }),
+  )
+  .max(6);
 
 export const DEBATE_RESERVE_USD = 0.016;
 
@@ -20,7 +27,7 @@ export interface DebateVerifier {
   verify(
     evidence: Evidence[],
     hypotheses: Hypothesis[],
-  ): Promise<{ verdict: DebateVerdict; costUsd: number }>;
+  ): Promise<{ verdict: DebateVerdict; costUsd: number; transcript?: z.infer<typeof Transcript> }>;
 }
 
 export function createDebateVerifier(
@@ -38,7 +45,11 @@ export function createDebateVerifier(
       const response = await fetch(new URL("/verify", url), {
         method: "POST",
         redirect: "error",
-        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          "x-debate-transcript": "1",
+        },
         body: JSON.stringify({ evidence: compact, hypotheses, rounds: 1 }),
         signal: AbortSignal.timeout(timeoutMs),
       }).catch((error: unknown) => {
@@ -59,7 +70,15 @@ export function createDebateVerifier(
       const costUsd = Number(rawCost);
       if (rawCost === null || !/^\d+(?:\.\d+)?$/.test(rawCost) || !Number.isFinite(costUsd))
         throw new Error("Invalid debate usage");
-      return { verdict: DebateVerdictSchema.parse(await response.json()), costUsd };
+      const body = await response.json();
+      if (body && typeof body === "object" && "verdict" in body && "transcript" in body) {
+        return {
+          verdict: DebateVerdictSchema.parse(body.verdict),
+          costUsd,
+          transcript: Transcript.parse(body.transcript),
+        };
+      }
+      return { verdict: DebateVerdictSchema.parse(body), costUsd };
     },
   };
 }

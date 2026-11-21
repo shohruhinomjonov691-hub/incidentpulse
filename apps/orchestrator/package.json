@@ -5,7 +5,9 @@
   "type": "module",
   "description": "LangGraph.js incident graph, Agents SDK agents, BullMQ worker.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./journal": "./src/journal.ts",
+    "./budget": "./src/weekly-budget.ts"
   },
   "scripts": {
     "test": "vitest run",

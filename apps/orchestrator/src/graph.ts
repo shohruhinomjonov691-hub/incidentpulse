@@ -1,5 +1,5 @@
 import type { ModelPricing } from "@incidentpulse/config";
-import { describeError, type Redactor } from "@incidentpulse/redact";
+import { describeError, type Redactor, redactDeep } from "@incidentpulse/redact";
 import {
   type Category,
   type DebateVerdict,
@@ -26,7 +26,9 @@ import { WeeklyBudgetExhausted } from "./agents/sdk.ts";
 import { costOf, sumUsage } from "./cost.ts";
 import { DEBATE_RESERVE_USD, DebateUnavailable, type DebateVerifier } from "./debate.ts";
 import { evidenceForModel } from "./evidence.ts";
+import { toolJournal } from "./guarded-mcp.ts";
 import { scrubText } from "./guardrails.ts";
+import type { IncidentStatus, Journal, TimelineItem } from "./journal.ts";
 import type { PrimaryEvidence } from "./primary-evidence.ts";
 import type { RemediationProposer } from "./remediation-proposer.ts";
 import {
@@ -77,6 +79,7 @@ const IncidentAnnotation = Annotation.Root({
   }),
   hypotheses: Annotation<Hypothesis[]>({ reducer: (_a, b) => b, default: () => [] }),
   verdict: Annotation<DebateVerdict | null>(),
+  debateTranscript: Annotation<{ role: string; text: string }[] | undefined>(),
   debateRounds: Annotation<number>({ reducer: sum, default: () => 0 }),
   remediation: Annotation<IncidentState["remediation"]>(),
   approval: Annotation<IncidentState["approval"]>(),
@@ -123,6 +126,7 @@ export interface GraphDeps {
   /** Hard stop per calendar week across all incidents, USD (SPEC §8). */
   weeklyBudgetUsd: number;
   weeklyBudget: WeeklyBudget;
+  reserveWeekly?(at: Date, usd: number): Promise<boolean>;
   /** Live model requests already charge the ledger. Mocks are accounted for by node. */
   requestPricing?: ModelPricing;
   debate?: { mode: "auto" | "always" | "off"; client?: DebateVerifier };
@@ -133,6 +137,9 @@ export interface GraphDeps {
     recover(state: GraphState): Promise<{ ok: boolean; check: string }>;
   };
   checkpointer?: BaseCheckpointSaver;
+  journal?: Journal;
+  postmortemUrl?(incidentId: string): string | undefined;
+  onJournalError?(error: unknown): void;
   now?: () => Date;
 }
 
@@ -146,6 +153,10 @@ interface InvestigatePayload {
   triageCategory: Category;
   triageReason: string;
   quickEvidence?: Evidence[];
+}
+
+function isGraphState(state: GraphState | InvestigatePayload): state is GraphState {
+  return !("specialist" in state);
 }
 
 /** The SPEC §3.1 view of the graph state, validated against the shared contract. */
@@ -202,10 +213,81 @@ export function buildIncidentGraph(deps: GraphDeps) {
     }
   };
   const gated =
-    <S extends { incidentId: string }, R>(node: (s: S) => Promise<R>) =>
+    <S extends GraphState | InvestigatePayload, R extends Partial<GraphState>>(
+      name: string,
+      node: (s: S) => Promise<R>,
+      checkStop = true,
+    ) =>
     async (state: S): Promise<R> => {
-      await waitIfStopped(state.incidentId);
-      return node(state);
+      if (checkStop) await waitIfStopped(state.incidentId);
+      if (!deps.journal) return node(state);
+      const item = (type: string, data: unknown): TimelineItem => ({
+        type,
+        at: now().toISOString(),
+        data,
+      });
+      const branch = "specialist" in state ? { specialist: state.specialist } : {};
+      const append = async (
+        events: TimelineItem[],
+        snapshot?: Parameters<Journal["append"]>[0]["snapshot"],
+      ) => {
+        try {
+          await deps.journal?.append({
+            id: state.incidentId,
+            project: state.project,
+            events: redactDeep(events, deps.redact),
+            snapshot,
+          });
+        } catch (error) {
+          deps.onJournalError?.(error);
+        }
+      };
+      await append([item("node_start", { node: name, ...branch })]);
+      const update = await toolJournal.run(
+        (data) => append([item("tool_call", { node: name, ...data })]),
+        () => node(state),
+      );
+      const events: TimelineItem[] = [];
+      const add = (type: string, data: unknown) => events.push(item(type, data));
+      if (name === "intake")
+        for (const evidence of update.evidence ?? []) add("tool_call", evidence);
+      if (update.hypotheses) add("hypotheses", update.hypotheses);
+      if (update.debateTranscript) add("debate", update.debateTranscript);
+      if (update.verdict) add("verdict", update.verdict);
+      if (update.approval) add("approval", update.approval);
+      if (update.execution) add("execution", update.execution);
+      if (update.recovery) add("recovery", update.recovery);
+      if (update.escalation) add("escalated", { reason: update.escalation.reason });
+      add("node_end", { node: name, ...branch });
+      if (!isGraphState(state)) await append(events);
+      else {
+        const merged = {
+          ...state,
+          ...update,
+          evidence: [...state.evidence, ...(update.evidence ?? [])],
+          costUsd: state.costUsd + (update.costUsd ?? 0),
+        };
+        const status: IncidentStatus =
+          merged.workflowStatus ??
+          (merged.escalation
+            ? "escalated"
+            : merged.reportSent
+              ? "reported"
+              : merged.approval?.status === "pending"
+                ? "awaiting_approval"
+                : "investigating");
+        try {
+          await append(events, {
+            state: redactDeep(toIncidentState(merged), deps.redact),
+            status,
+            approvalId: merged.approvalId,
+          });
+        } catch (error) {
+          deps.onJournalError?.(error);
+          await append(events);
+        }
+      }
+      return update;
     };
 
   const intake = async (state: GraphState) => {
@@ -451,7 +533,13 @@ export function buildIncidentGraph(deps: GraphDeps) {
         weeklySpentUsd: spent,
       };
     }
-    await deps.weeklyBudget.addUsd(DEBATE_RESERVE_USD, at);
+    if (deps.reserveWeekly) {
+      if (!(await deps.reserveWeekly(at, DEBATE_RESERVE_USD)))
+        return {
+          overBudget: "weekly" as const,
+          weeklySpentUsd: await deps.weeklyBudget.spentUsd(at),
+        };
+    } else await deps.weeklyBudget.addUsd(DEBATE_RESERVE_USD, at);
     let result: Awaited<ReturnType<DebateVerifier["verify"]>>;
     try {
       result = await debate.client.verify(distinct, state.hypotheses);
@@ -489,6 +577,10 @@ export function buildIncidentGraph(deps: GraphDeps) {
         : null,
       debateRounds: 1,
       costUsd: result.costUsd,
+      debateTranscript: result.transcript?.map(({ role, text }) => ({
+        role,
+        text: deps.redact(scrubText(text).text),
+      })),
       weeklySpentUsd: weeklyTotal,
       overBudget: classify(state.costUsd + result.costUsd, weeklyTotal),
       trace: [
@@ -657,8 +749,10 @@ export function buildIncidentGraph(deps: GraphDeps) {
     const name = PROJECT_DISPLAY_NAMES[state.project];
     if (state.recovery?.ok) {
       await deps.actions?.flow.approvals.closeForRecovery(state.project, state.signal.check);
+      const url = deps.postmortemUrl?.(state.incidentId);
       await deps.notifier.send(
-        `🟢 ${name} · #${state.incidentId} · Tiklandi (${state.recovery.check})`,
+        `🟢 ${name} · #${state.incidentId} · Tiklandi (${state.recovery.check})${url?.startsWith("http:") ? `\n📄 Postmortem: ${url}` : ""}`,
+        url?.startsWith("https:") ? [[{ text: "📄 Postmortem", url }]] : undefined,
       );
       return { workflowStatus: "recovered" as const };
     }
@@ -715,24 +809,26 @@ export function buildIncidentGraph(deps: GraphDeps) {
   };
 
   return new StateGraph(IncidentAnnotation)
-    .addNode("intake", gated(intake))
-    .addNode("triage", gated(triage))
+    .addNode("intake", gated("intake", intake))
+    .addNode("triage", gated("triage", triage))
     .addNode(
       "investigate",
-      gated(investigate) as unknown as (s: GraphState) => Promise<Partial<GraphState>>,
+      gated("investigate", investigate) as unknown as (
+        s: GraphState,
+      ) => Promise<Partial<GraphState>>,
     )
-    .addNode("join", gated(join))
-    .addNode("synthesize", gated(synthesize))
-    .addNode("verify", gated(verify))
-    .addNode("reinvestigate", gated(reinvestigate))
-    .addNode("propose", gated(propose))
-    .addNode("request_approval", gated(requestApproval))
-    .addNode("await_approval", awaitApproval)
-    .addNode("execute", gated(execute))
-    .addNode("verify_recovery", gated(verifyRecovery))
-    .addNode("close", gated(close))
-    .addNode("report", gated(report))
-    .addNode("escalate", gated(escalate))
+    .addNode("join", gated("join", join))
+    .addNode("synthesize", gated("synthesize", synthesize))
+    .addNode("verify", gated("verify", verify))
+    .addNode("reinvestigate", gated("reinvestigate", reinvestigate))
+    .addNode("propose", gated("propose", propose))
+    .addNode("request_approval", gated("request_approval", requestApproval))
+    .addNode("await_approval", gated("await_approval", awaitApproval, false))
+    .addNode("execute", gated("execute", execute))
+    .addNode("verify_recovery", gated("verify_recovery", verifyRecovery))
+    .addNode("close", gated("close", close))
+    .addNode("report", gated("report", report))
+    .addNode("escalate", gated("escalate", escalate))
     .addEdge(START, "intake")
     .addConditionalEdges("intake", (s) => (s.overBudget ? "escalate" : "triage"), [
       "escalate",

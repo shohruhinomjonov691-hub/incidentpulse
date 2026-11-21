@@ -136,8 +136,13 @@ async function fixture() {
   const buttons: string[] = [];
   const send = m.notifier.send;
   const notify = {
-    async send(text: string, keyboard?: Array<Array<{ callback_data: string }>>) {
-      if (keyboard) buttons.push(...keyboard.flat().map((b) => b.callback_data));
+    async send(text: string, keyboard?: import("@incidentpulse/telegram-bot").TelegramButtons) {
+      if (keyboard)
+        buttons.push(
+          ...keyboard
+            .flat()
+            .flatMap((button) => ("callback_data" in button ? [button.callback_data] : [])),
+        );
       return send(text);
     },
   };

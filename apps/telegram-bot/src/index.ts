@@ -3,7 +3,9 @@ import { Api } from "grammy";
 
 export { createInvestigationBot } from "./investigate.ts";
 
-export type TelegramButtons = Array<Array<{ text: string; callback_data: string }>>;
+export type TelegramButtons = Array<
+  Array<{ text: string; callback_data: string } | { text: string; url: string }>
+>;
 
 export interface Notifier {
   send(text: string, buttons?: TelegramButtons): Promise<{ messageId: number }>;

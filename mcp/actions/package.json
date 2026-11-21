@@ -5,7 +5,8 @@
   "type": "module",
   "description": "State-changing MCP server: runbook allowlist, approval-token gated.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./approvals": "./src/approvals.ts"
   },
   "scripts": {
     "test": "vitest run",

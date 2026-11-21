@@ -5,7 +5,7 @@ waits for human approval, executes, verifies recovery and writes a postmortem.
 
 Full design: [docs/SPEC.md](docs/SPEC.md). Pinned versions: [docs/VERSIONS.md](docs/VERSIONS.md). Decisions: [docs/adr/](docs/adr/).
 
-**Status: Phase 4.** Signal → change detection and cache → triage → parallel specialists → synthesis → optional debate → optional human-approved runbook → recovery check. Automatic investigations run on change or in a Sunday batch, with a shared $0.50 weekly LLM budget.
+**Status: Phase 5.** Closed incidents get a CrewAI postmortem and a private web dashboard (live timeline, web Approve, evidence-only chat). Signal → change detection and cache → triage → parallel specialists → synthesis → optional debate → optional human-approved runbook → recovery check. Automatic investigations run on change or in a Sunday batch, with a shared $0.50 weekly LLM budget.
 
 ## Prerequisites
 

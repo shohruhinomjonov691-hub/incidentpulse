@@ -85,3 +85,16 @@ Mean fresh investigation cost was $0.00924, 3.5% lower across these three scenar
 Start local Postgres and Redis with `docker compose up -d`. With the configured Telegram bot, user allowlist and OpenAI key, run `pnpm sandbox:approvals`. The harness starts a loopback debate service and uses an isolated Postgres schema and Redis key prefix. Approve both `[SANDBOX]` Telegram messages when prompted. The TLS case stages and deploys a valid local-CA leaf and reloads Nginx. The stopped-container case restarts only `ipsb-a-app`. Both rerun the same sandbox HTTPS check before the green notification.
 
 The paid run shares a $0.15 ceiling across both cases. The normal weekly budget remains $0.50. The harness tears down the fault-injection stack and writes redacted outcomes to `sandbox/results/phase3-4.json`.
+
+
+## Phase 5: scenario 1 with the web UI and a postmortem
+
+`pnpm sandbox:phase5` starts the debate service, the postmortem crew and the web app against a throw-away schema, injects
+scenario 1 and prints the web URL and a one-time admin password. Approve is pressed in the web UI (or with `--auto`, through the
+same web API endpoint). The script then waits for recovery and the postmortem, asks one "Ask this incident" question and writes
+[results/phase5.json](results/phase5.json).
+
+Last run: category `tls`, runbook `certbot_renew`, approved by `web:admin`, recovered, postmortem $0.0043, chat answer
+cites evidence IDs. One run cost **$0.0144** in total. The attempts needed to get there (first postmortem call returned empty
+because `reasoning_effort=low` used the whole 640-token limit; one run with the fault not live; one with the web server stale) cost
+about **$0.063** altogether, under the $0.10 limit. Screenshots: [docs/screenshots/](../docs/screenshots/).

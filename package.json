@@ -15,7 +15,8 @@
     "lint:fix": "biome check --write .",
     "sandbox:eval": "pnpm --filter @incidentpulse/orchestrator sandbox:eval",
     "incident:simulate": "node --env-file-if-exists=.env apps/intake/scripts/simulate.ts",
-    "sandbox:approvals": "node --env-file-if-exists=.env apps/orchestrator/scripts/sandbox-approvals.ts"
+    "sandbox:approvals": "node --env-file-if-exists=.env apps/orchestrator/scripts/sandbox-approvals.ts",
+    "sandbox:phase5": "node --env-file-if-exists=.env apps/orchestrator/scripts/sandbox-phase5.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

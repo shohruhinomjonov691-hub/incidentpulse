@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Redactor } from "@incidentpulse/redact";
 import { MCPServerStdio } from "@openai/agents";
 
@@ -38,6 +39,10 @@ export interface GuardedMcpOptions {
   source: string;
   redact: Redactor;
 }
+
+export const toolJournal = new AsyncLocalStorage<
+  (event: { tool: string; source: string; excerpt: string; blocked: boolean }) => Promise<void>
+>();
 
 /**
  * An MCP stdio server whose tool results pass through the INPUT guardrail before the agent sees
@@ -86,13 +91,28 @@ export class GuardedMcpServer extends MCPServerStdio {
         return this.guard.redact([digest, ...new Set(marked)].join("\n").slice(0, 1500));
       },
     });
+    const blocked = BLOCKED.some((re) => re.test(raw));
     this.calls.push({
       tool: args[0],
       scrubbedText: guarded.scrubbedText,
       flags: guarded.flags,
       flaggedCount: guarded.flaggedCount,
-      blocked: BLOCKED.some((re) => re.test(raw)),
+      blocked,
     });
+    const record = toolJournal.getStore();
+    if (record)
+      await record({
+        tool: args[0],
+        source: this.guard.source,
+        blocked,
+        excerpt: buildEvidence({
+          id: "",
+          tool: args[0],
+          output: guarded.scrubbedText,
+          at: new Date(),
+          redact: this.guard.redact,
+        }).excerpt,
+      });
     return [{ type: "text", text: guarded.modelText }] as unknown as Awaited<
       ReturnType<MCPServerStdio["callTool"]>
     >;

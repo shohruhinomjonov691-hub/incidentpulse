@@ -24,11 +24,13 @@ import { createContinuations } from "./continuations.ts";
 import { createDebateVerifier } from "./debate.ts";
 import { buildIncidentGraph } from "./graph.ts";
 import { createInvestigationPolicy } from "./investigation-policy.ts";
+import { createJournal } from "./journal.ts";
 import type { Logger } from "./log.ts";
+import { createPostmortemWorker, postmortemLink } from "./postmortem.ts";
 import { createPrimaryProbe } from "./primary-evidence.ts";
 import { createRecoveryCheck } from "./recovery.ts";
 import { createRemediationProposer } from "./remediation-proposer.ts";
-import { createRedisWeeklyBudget } from "./weekly-budget.ts";
+import { createRedisWeeklyBudget, reserveWeekly } from "./weekly-budget.ts";
 import { createIncidentWorker } from "./worker.ts";
 
 export async function startRuntime(options: {
@@ -40,11 +42,16 @@ export async function startRuntime(options: {
   childEnv?: Record<string, string>;
   strictBudget?: boolean;
   noticePrefix?: string;
+  webOrigin?: string;
+  postmortem?: { url: string; secret: string };
 }) {
   const { config, redact, log, prefix } = options;
   configureAgentsSdk(config.openaiApiKey);
   const redis = new Redis(config.redisUrl);
   const controls = createActionControls(redis, prefix);
+  const budgetPrefix = prefix ? `${prefix}:budget:weekly` : undefined;
+  const reserve = (at: Date, usd: number) =>
+    reserveWeekly(redis, at, usd, config.weeklyBudgetUsd, budgetPrefix);
   const weeklyBudget = createRedisWeeklyBudget(
     redis,
     prefix ? { keyPrefix: `${prefix}:budget:weekly` } : {},
@@ -64,7 +71,7 @@ export async function startRuntime(options: {
     budget: weeklyBudget,
     limitUsd: config.weeklyBudgetUsd,
     pricing: config.pricing,
-    ...(options.strictBudget ? { strictBudget: true } : {}),
+    reserve,
   });
 
   const agentOptions = {
@@ -82,9 +89,17 @@ export async function startRuntime(options: {
   } as const;
   const probe = createPrimaryProbe(agentOptions);
   const registry = config.actionsEnabled ? loadRunbookRegistry(config.actionScopes) : undefined;
-  const pool = registry ? new Pool({ connectionString: config.databaseUrl }) : undefined;
+  const pool = new Pool({
+    connectionString: config.databaseUrl,
+    connectionTimeoutMillis: 2000,
+    query_timeout: 3000,
+  });
+  const journal = createJournal(pool);
+  await journal.setup();
   const approvals =
-    pool && config.approvalSecret ? createApprovalStore(pool, config.approvalSecret) : undefined;
+    registry && config.approvalSecret
+      ? createApprovalStore(pool, config.approvalSecret)
+      : undefined;
   await approvals?.setup();
   const flow =
     approvals && registry && config.approvalSecret
@@ -108,6 +123,11 @@ export async function startRuntime(options: {
     budgetUsd: config.budgetUsd,
     weeklyBudgetUsd: config.weeklyBudgetUsd,
     weeklyBudget,
+    reserveWeekly: reserve,
+    journal,
+    postmortemUrl: (id) => postmortemLink(options.webOrigin ?? process.env.WEB_ORIGIN, id),
+    onJournalError: (error) =>
+      log.error("incident journal failed", { error: describeError(error, redact) }),
     requestPricing: config.pricing,
     checkpointer,
     controls,
@@ -183,6 +203,34 @@ export async function startRuntime(options: {
   }, 2500);
   void tick();
 
+  const postmortemConfig = options.postmortem ?? {
+    url: process.env.POSTMORTEM_URL,
+    secret: process.env.POSTMORTEM_SHARED_SECRET,
+  };
+  const generate =
+    postmortemConfig.url && (postmortemConfig.secret?.length ?? 0) >= 32
+      ? createPostmortemWorker({
+          journal,
+          redact,
+          reserve,
+          release: (at, usd) => weeklyBudget.releaseUsd(usd, at),
+          url: postmortemConfig.url,
+          secret: postmortemConfig.secret as string,
+        })
+      : undefined;
+  let generating: Promise<void> | undefined;
+  const postmortemTimer =
+    generate &&
+    setInterval(() => {
+      generating ??= generate()
+        .catch((error) =>
+          log.error("postmortem generation failed", { error: describeError(error, redact) }),
+        )
+        .finally(() => {
+          generating = undefined;
+        });
+    }, 2500);
+
   const bot = config.telegramAllowedUserIds.size
     ? createInvestigationBot({
         token: config.telegramBotToken,
@@ -224,14 +272,17 @@ export async function startRuntime(options: {
     graph,
     weeklyBudget,
     approvals,
+    journal,
     async close() {
       clearInterval(timer);
+      if (postmortemTimer) clearInterval(postmortemTimer);
       await ticking;
+      await generating;
       await bot?.stop();
       await polling;
       await worker.close();
       await flow?.close();
-      await pool?.end();
+      await pool.end();
       await checkpointer.end();
       await provider.close();
       redis.disconnect();

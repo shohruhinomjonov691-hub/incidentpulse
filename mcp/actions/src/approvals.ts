@@ -157,7 +157,7 @@ export function createApprovalStore(pool: Pool, secret: string, now = () => new 
       ]);
     },
 
-    async decide(id: string, decision: "approved" | "rejected", userId: number) {
+    async decide(id: string, decision: "approved" | "rejected", userId: number | "web:admin") {
       const at = now();
       const { rowCount } = await pool.query(
         `

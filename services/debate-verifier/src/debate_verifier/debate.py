@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent_framework import Agent
@@ -35,6 +35,7 @@ class JudgeReply(BaseModel):
 class DebateResult:
     verdict: dict[str, Any]
     cost_usd: float
+    transcript: list[dict[str, str]] = field(default_factory=list)
 
 
 def untrusted(data: Any) -> str:
@@ -67,6 +68,7 @@ async def run_debate(payload: dict[str, Any]) -> DebateResult:
     evidence_ids = {item["id"] for item in evidence}
     facts = untrusted({"evidence": evidence, "hypotheses": hypotheses})
     total = 0.0
+    transcript = []
     async with AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=0, timeout=12) as api:
         client = OpenAIChatClient(model=MODEL, async_client=api)
         investigator = Agent(
@@ -123,6 +125,13 @@ async def run_debate(payload: dict[str, Any]) -> DebateResult:
                 judge, facts + untrusted([case, critique.model_dump()]), JudgeReply
             )
             prior = JudgeReply.model_validate_json(verdict_reply.text).model_dump()
+            transcript.extend(
+                [
+                    {"role": "Investigator", "text": case},
+                    {"role": "Skeptic", "text": critique_reply.text[:1500]},
+                    {"role": "Judge", "text": verdict_reply.text[:1500]},
+                ]
+            )
             if critique.weakestEvidenceId:
                 prior["dissent"] = f"[{critique.weakestEvidenceId}] {prior['dissent']}"[:500]
             if prior["confidence"] >= 0.7:
@@ -130,4 +139,4 @@ async def run_debate(payload: dict[str, Any]) -> DebateResult:
 
     if prior is None:
         raise ValueError("No debate round was run")
-    return DebateResult(verdict=prior, cost_usd=total)
+    return DebateResult(verdict=prior, cost_usd=total, transcript=transcript)

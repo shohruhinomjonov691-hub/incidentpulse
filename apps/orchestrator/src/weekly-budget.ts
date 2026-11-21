@@ -11,6 +11,28 @@ export interface RedisLike {
   expire(key: string, seconds: number): Promise<unknown>;
 }
 
+export async function reserveWeekly(
+  redis: { eval(script: string, keys: number, ...args: (string | number)[]): Promise<unknown> },
+  at: Date,
+  usd: number,
+  limit: number,
+  prefix = "incidentpulse:budget:weekly",
+) {
+  const accepted = await redis.eval(
+    `local used = tonumber(redis.call('GET', KEYS[1]) or '0')
+     if used + tonumber(ARGV[1]) > tonumber(ARGV[2]) then return 0 end
+     redis.call('INCRBY', KEYS[1], ARGV[1])
+     redis.call('EXPIRE', KEYS[1], ARGV[3])
+     return 1`,
+    1,
+    `${prefix}:${weekKey(at)}`,
+    toMicro(usd),
+    toMicro(limit),
+    KEY_TTL_SECONDS,
+  );
+  return accepted === 1;
+}
+
 const MICRO = 1_000_000;
 const KEY_TTL_SECONDS = 14 * 24 * 60 * 60;
 

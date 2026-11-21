@@ -8,12 +8,33 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "smoke": "next build && playwright test",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "@types/node": "catalog:",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.122",
+    "@incidentpulse/mcp-actions": "workspace:*",
+    "@incidentpulse/orchestrator": "workspace:*",
+    "@incidentpulse/redact": "workspace:*",
+    "ai": "7.0.178",
+    "ioredis": "5.11.1",
+    "next": "16.4.6",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0"
   }
 }

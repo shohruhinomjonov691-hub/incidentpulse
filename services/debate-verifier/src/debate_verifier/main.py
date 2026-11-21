@@ -61,4 +61,6 @@ async def verify(request: Request, response: Response) -> dict:
         raise HTTPException(status_code=502, detail="Debate result unavailable") from err
 
     response.headers["X-Debate-Cost-Usd"] = f"{result.cost_usd:.9f}"
+    if request.headers.get("X-Debate-Transcript") == "1":
+        return {"verdict": result.verdict, "transcript": result.transcript}
     return result.verdict
