@@ -1,0 +1,341 @@
+# IncidentPulse production stack (Phase 7). Memory budget for the whole stack: 1752 MiB (<= 2 GiB).
+#
+#   docker compose --env-file /opt/incidentpulse/secrets/.env -f compose.prod.yaml up -d
+#
+# Rules this file enforces:
+#   - Nothing listens on a public interface. Only `web` is published, on 127.0.0.1:3000 (nginx proxies to it).
+#     postgres, redis, intake and the Python services have no published ports at all.
+#   - Every service has mem_limit (swap off: memswap_limit == mem_limit), a CPU cap and a pid cap.
+#   - Each service receives ONLY the variables it needs (no shared env_file), so the web UI and the Python
+#     services never see the Telegram token, and so on.
+#   - Docker is reachable read-only through docker-proxy (container GET + logs; POST is off).
+#     Host data (pm2, nginx -T, certbot) and all state-changing runbooks go through the host actions runner
+#     (systemd service `incidentpulse-actions`, unix socket mounted from /run/incidentpulse).
+#
+# There is no separate `telegram-bot` container on purpose. The bot (grammY long polling) runs inside the
+# orchestrator: approval buttons need the approvals store and the graph resume path, and a second process
+# polling the same bot token would make Telegram answer 409 Conflict to both.
+name: incidentpulse
+
+x-node-app: &node-app
+  image: incidentpulse-app:${IP_TAG:-local}
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
+  networks: [backend]
+  logging: &logging
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-python-app: &python-app
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 128
+  networks: [backend]
+  logging: *logging
+
+services:
+  postgres:
+    image: postgres:18.7-alpine
+    restart: unless-stopped
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.5
+    pids_limit: 128
+    networks: [backend]
+    logging: *logging
+    environment:
+      POSTGRES_USER: incidentpulse
+      POSTGRES_DB: incidentpulse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/incidentpulse/secrets/.env}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - max_connections=30
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - effective_cache_size=96MB
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incidentpulse -d incidentpulse"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    networks: [backend]
+    logging: *logging
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in /opt/incidentpulse/secrets/.env}
+    # BullMQ needs noeviction; AOF so queued work survives a restart. No `ports:` -> unreachable from the host.
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --maxmemory 48mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # Read-only Docker API for mcp-infra (docker ps, docker logs). Only container GETs; POST is refused.
+  # Note: the proxy limits verbs, not data. A container GET can include the container's environment, so the
+  # orchestrator (the only client, on an internal network) must stay trusted.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    mem_limit: 24m
+    memswap_limit: 24m
+    cpus: 0.25
+    pids_limit: 64
+    networks: [dockerapi]
+    logging: *logging
+    environment:
+      CONTAINERS: "1"
+      POST: "0"
+      EVENTS: "0"
+      PING: "1"
+      VERSION: "1"
+      INFO: "0"
+      IMAGES: "0"
+      NETWORKS: "0"
+      VOLUMES: "0"
+      EXEC: "0"
+      BUILD: "0"
+      COMMIT: "0"
+      CONFIGS: "0"
+      SECRETS: "0"
+      SERVICES: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+      TASKS: "0"
+      AUTH: "0"
+      DISTRIBUTION: "0"
+      NODES: "0"
+      PLUGINS: "0"
+      SESSION: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2375/_ping | grep -q OK"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  intake:
+    <<: *node-app
+    # Built here; orchestrator and web reuse the same image.
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.node
+    mem_limit: 96m
+    memswap_limit: 96m
+    cpus: 0.25
+    command: ["node", "apps/intake/src/main.ts"]
+    environment:
+      NODE_OPTIONS: --max-old-space-size=56
+      INTAKE_HOST: 0.0.0.0
+      INTAKE_PORT: "8787"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:?set WEBHOOK_HMAC_SECRET}
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/health | grep -q ok"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  orchestrator:
+    <<: *node-app
+    pull_policy: never
+    mem_limit: 448m
+    memswap_limit: 448m
+    cpus: 1.0
+    command: ["node", "apps/orchestrator/src/main.ts"]
+    # The runner socket lives in /run/incidentpulse (0750, group incidentpulse-ipc). The container user joins
+    # that group by numeric id (IPC_GID, see docs/DEPLOY.md). Mounted read-only: connect() still works.
+    group_add: ["${IPC_GID:?set IPC_GID to the gid of the incidentpulse-ipc group}"]
+    volumes:
+      - /run/incidentpulse:/run/incidentpulse:ro
+    environment:
+      NODE_OPTIONS: --max-old-space-size=320
+      HEARTBEAT_FILE: /tmp/heartbeat
+      DATABASE_URL: postgres://incidentpulse:${POSTGRES_PASSWORD}@postgres:5432/incidentpulse
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      INCIDENT_BUDGET_USD: ${INCIDENT_BUDGET_USD:-0.50}
+      WEEKLY_BUDGET_USD: ${WEEKLY_BUDGET_USD:-0.50}
+      INVESTIGATE_MODE: on_change
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:?set TELEGRAM_ALLOWED_USER_IDS}
+      DEBATE_MODE: auto
+      DEBATE_URL: http://debate-verifier:8790
+      DEBATE_SHARED_SECRET: ${DEBATE_SHARED_SECRET:?set DEBATE_SHARED_SECRET}
+      POSTMORTEM_URL: http://postmortem-crew:8791
+      POSTMORTEM_SHARED_SECRET: ${POSTMORTEM_SHARED_SECRET:?set POSTMORTEM_SHARED_SECRET}
+      WEB_ORIGIN: https://incidentpulse.gotrips.cloud
+      # Human-approved actions go to the host runner. APPROVAL_HMAC_SECRET also signs Telegram buttons.
+      ACTIONS_ENABLED: "true"
+      APPROVAL_HMAC_SECRET: ${APPROVAL_HMAC_SECRET:?set APPROVAL_HMAC_SECRET}
+      HOST_RUNNER_SOCKET: /run/incidentpulse/actions.sock
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # Allowlists (JSON, see .env.production.example and docs/DEPLOY.md section 5)
+      PROJECT_DOMAINS_JSON: ${PROJECT_DOMAINS_JSON:?set PROJECT_DOMAINS_JSON}
+      PROJECT_CONTAINERS_JSON: ${PROJECT_CONTAINERS_JSON:?set PROJECT_CONTAINERS_JSON}
+      PROJECT_PM2_JSON: ${PROJECT_PM2_JSON:?set PROJECT_PM2_JSON}
+      PROJECT_ACTION_SCOPES_JSON: ${PROJECT_ACTION_SCOPES_JSON:?set PROJECT_ACTION_SCOPES_JSON}
+      # LLM-free health poller: every 15 minutes, investigation only when a project's state changes.
+      HEALTH_POLL_ENABLED: "true"
+      HEALTH_POLL_URLS_JSON: ${HEALTH_POLL_URLS_JSON:-}
+      # Optional. Blank = off.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      # service_started, not healthy: a proxy that is slow or unhealthy must not stop incident handling.
+      docker-proxy: { condition: service_started }
+    networks: [backend, dockerapi]
+    healthcheck:
+      test: ["CMD-SHELL", 'test -n "$$(find /tmp/heartbeat -mmin -2 2>/dev/null)"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  web:
+    <<: *node-app
+    pull_policy: never
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    working_dir: /app/apps/web
+    command: ["./node_modules/.bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]
+    # The ONLY published port, and only on loopback: nginx (host) terminates TLS and proxies here.
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
+      DATABASE_URL: postgres://incidentpulse:${POSTGRES_PASSWORD}@postgres:5432/incidentpulse
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      WEB_ORIGIN: https://incidentpulse.gotrips.cloud
+      WEB_ADMIN_PASSWORD: ${WEB_ADMIN_PASSWORD:?set WEB_ADMIN_PASSWORD (openssl rand -hex 24)}
+      APPROVAL_HMAC_SECRET: ${APPROVAL_HMAC_SECRET:?set APPROVAL_HMAC_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      WEEKLY_BUDGET_USD: ${WEEKLY_BUDGET_USD:-0.50}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3000/login"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  debate-verifier:
+    <<: *python-app
+    image: incidentpulse-debate-verifier:${IP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.python
+      args: { SERVICE: debate-verifier }
+    mem_limit: 288m
+    memswap_limit: 288m
+    cpus: 0.5
+    command:
+      - uvicorn
+      - --app-dir
+      - /app/services/debate-verifier/src
+      - debate_verifier.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8790"
+      - --no-access-log
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      DEBATE_SHARED_SECRET: ${DEBATE_SHARED_SECRET:?set DEBATE_SHARED_SECRET}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/health', timeout=3)",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postmortem-crew:
+    <<: *python-app
+    image: incidentpulse-postmortem-crew:${IP_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.python
+      args: { SERVICE: postmortem-crew }
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.5
+    command:
+      - uvicorn
+      - --app-dir
+      - /app/services/postmortem-crew/src
+      - postmortem_crew.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8791"
+      - --no-access-log
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      POSTMORTEM_SHARED_SECRET: ${POSTMORTEM_SHARED_SECRET:?set POSTMORTEM_SHARED_SECRET}
+      # CrewAI phones home with anonymous telemetry unless told not to.
+      CREWAI_DISABLE_TELEMETRY: "true"
+      OTEL_SDK_DISABLED: "true"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/health', timeout=3)",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+networks:
+  backend: {}
+  # No route to the outside: only the orchestrator and the proxy are on it.
+  dockerapi:
+    internal: true
+
+volumes:
+  pgdata:
+  redisdata:

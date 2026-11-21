@@ -45,6 +45,22 @@ const EnvSchema = z.object({
   ACTIONS_ENABLED: z.enum(["true", "false"]).default("false"),
   APPROVAL_HMAC_SECRET: z.string().min(32).optional(),
   PROJECT_ACTION_SCOPES_JSON: z.string().optional(),
+  /** Unix socket of the host actions runner (production). Replaces ACTION_EXEC_USER/sudo from a container. */
+  HOST_RUNNER_SOCKET: z
+    .string()
+    .regex(/^\/[A-Za-z0-9_./-]+$/, "must be an absolute socket path")
+    .optional(),
+  /** Read-only Docker API, e.g. tcp://docker-proxy:2375 (docker-socket-proxy: container GET only). */
+  DOCKER_HOST: z
+    .string()
+    .regex(/^(tcp|unix):\/\/\S+$/, "must be tcp://... or unix://...")
+    .optional(),
+  /** Project id -> pm2 apps on the host, e.g. {"kervan":["KERVAN","KERVAN-REACT"]}. */
+  PROJECT_PM2_JSON: z.string().optional(),
+  /** LLM-free health poller (every 15 minutes). Off by default. */
+  HEALTH_POLL_ENABLED: z.enum(["true", "false"]).default("false"),
+  /** Project id -> full URLs to poll; default: https://<domain>/ for each PROJECT_DOMAINS_JSON entry. */
+  HEALTH_POLL_URLS_JSON: z.string().optional(),
   INVESTIGATE_MODE: z.enum(["on_change", "weekly"]).default("on_change"),
   TELEGRAM_ALLOWED_USER_IDS: z
     .string()
@@ -139,6 +155,62 @@ export function resolveProjectContainers(json?: string): Record<ProjectId, strin
   return { ...empty, ...result.data } as Record<ProjectId, string[]>;
 }
 
+/** Pm2 apps per project; empty unless the operator lists them. */
+export function resolveProjectPm2(json?: string): Partial<Record<ProjectId, string[]>> {
+  if (!json) return {};
+  const schema = z.partialRecord(
+    ProjectIdSchema,
+    z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,126}$/)),
+  );
+  const result = schema.safeParse(parseJson("PROJECT_PM2_JSON", json));
+  if (!result.success) throw new ConfigError(["PROJECT_PM2_JSON: wrong shape"]);
+  return result.data as Partial<Record<ProjectId, string[]>>;
+}
+
+const hostOf = (domain: string) => new URL(`https://${domain}`).hostname;
+
+/**
+ * URLs the health poller probes. Every URL must stay inside its project's domain allowlist (the
+ * poller is an SSRF surface otherwise); the default is the root page of each configured domain.
+ */
+export function resolveHealthTargets(
+  json: string | undefined,
+  domains: Record<ProjectId, string[]>,
+): Partial<Record<ProjectId, string[]>> {
+  const targets: Partial<Record<ProjectId, string[]>> = {};
+  if (!json) {
+    for (const project of ProjectIdSchema.options) {
+      if (domains[project].length > 0) {
+        targets[project] = domains[project].map((d) => `https://${new URL(`https://${d}`).host}/`);
+      }
+    }
+    return targets;
+  }
+  const parsed = z
+    .partialRecord(ProjectIdSchema, z.array(z.string().min(1).max(2048)))
+    .safeParse(parseJson("HEALTH_POLL_URLS_JSON", json));
+  if (!parsed.success) throw new ConfigError(["HEALTH_POLL_URLS_JSON: wrong shape"]);
+  for (const [project, urls] of Object.entries(parsed.data) as Array<[ProjectId, string[]]>) {
+    const allowed = domains[project].map(hostOf);
+    for (const raw of urls) {
+      let url: URL;
+      try {
+        url = new URL(raw);
+      } catch {
+        throw new ConfigError([`HEALTH_POLL_URLS_JSON: invalid URL for ${project}`]);
+      }
+      const inside = allowed.some((d) => url.hostname === d || url.hostname.endsWith(`.${d}`));
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password || !inside) {
+        throw new ConfigError([
+          `HEALTH_POLL_URLS_JSON: ${project} URL is outside its domain allowlist`,
+        ]);
+      }
+    }
+    targets[project] = urls;
+  }
+  return targets;
+}
+
 /** A JSON object of string -> string (project id -> CodeTrail id / "owner/repo"). */
 export function resolveStringMap(name: string, json?: string): Record<string, string> | undefined {
   if (!json) return undefined;
@@ -224,6 +296,11 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "ACTION_EXEC_USER",
     "APPROVAL_HMAC_SECRET",
     "PROJECT_ACTION_SCOPES_JSON",
+    "HOST_RUNNER_SOCKET",
+    "DOCKER_HOST",
+    "PROJECT_PM2_JSON",
+    "HEALTH_POLL_ENABLED",
+    "HEALTH_POLL_URLS_JSON",
     "INVESTIGATE_MODE",
     "TELEGRAM_ALLOWED_USER_IDS",
     "PROJECT_DOMAINS_JSON",
@@ -253,6 +330,8 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     compose: z.strictObject({ name: z.string(), file: z.string() }).optional(),
     nginx: z.boolean().optional(),
     webroot: z.string().optional(),
+    /** Certificates and vhosts also cover www.<domain>. */
+    www: z.boolean().optional(),
   });
   const projectDomains = resolveProjectDomains(c.PROJECT_DOMAINS_JSON);
   const parsedScopes = c.PROJECT_ACTION_SCOPES_JSON
@@ -269,6 +348,16 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     debateSecret: c.DEBATE_SHARED_SECRET,
     actionsEnabled,
     actionExecUser: c.ACTION_EXEC_USER,
+    hostRunnerSocket: c.HOST_RUNNER_SOCKET,
+    dockerHost: c.DOCKER_HOST,
+    projectPm2: resolveProjectPm2(c.PROJECT_PM2_JSON),
+    healthPoll: {
+      enabled: c.HEALTH_POLL_ENABLED === "true",
+      targets:
+        c.HEALTH_POLL_ENABLED === "true"
+          ? resolveHealthTargets(c.HEALTH_POLL_URLS_JSON, projectDomains)
+          : {},
+    },
     approvalSecret: c.APPROVAL_HMAC_SECRET,
     actionScopes: Object.fromEntries(
       Object.entries(parsedScopes?.data ?? {}).map(([project, settings]) => [

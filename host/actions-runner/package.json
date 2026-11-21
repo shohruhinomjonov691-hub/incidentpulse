@@ -1,0 +1,21 @@
+{
+  "name": "@incidentpulse/actions-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Host actions runner (systemd service): unix-socket API for read-only host data and approved runbooks. No runtime dependencies.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "start": "node src/main.ts",
+    "render-sudoers": "node scripts/render-sudoers.ts"
+  },
+  "devDependencies": {
+    "@incidentpulse/mcp-actions": "workspace:*",
+    "@incidentpulse/runner-client": "workspace:*",
+    "@incidentpulse/schemas": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

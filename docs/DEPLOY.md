@@ -1,0 +1,568 @@
+# IncidentPulse: production deploy (Phase 7)
+
+Bu hujjat **serverda qo'lda bajariladigan** buyruqlar ketma-ketligi. Repo ichidagi hech narsa serverga o'zi ulanmaydi va hech narsa o'zi deploy qilmaydi. Har qadamdan keyin **Kutilgan natija** bor: natija boshqacha bo'lsa, keyingi qadamga o'tmang.
+
+Barcha buyruqlar `root` bilan yoki `sudo` bilan. Qulaylik uchun avval root shell oching: `sudo -i`.
+
+## 0. Nima o'rnatiladi
+
+```
+Internet ──► nginx (host, 80/443)
+               ├─ incidentpulse.gotrips.cloud ──► 127.0.0.1:3000  (web, Docker)
+               └─ boshqa saytlar (tegmaymiz)
+
+Docker (compose.prod.yaml, jami ≤ 1752 MiB):
+  postgres · redis · docker-proxy · intake · orchestrator · web · debate-verifier · postmortem-crew
+  hech qaysi port tashqariga ochilmaydi, faqat web 127.0.0.1:3000
+
+Host (systemd):
+  incidentpulse-actions  ──  unix socket /run/incidentpulse/actions.sock
+     alohida Unix user · sudoers (aniq buyruqlar) · approval token tekshiruvi · execFile
+```
+
+| Nima | Qayerda | Kim ko'radi / bajaradi |
+|---|---|---|
+| `docker ps`, `docker logs` | `docker-proxy` (faqat `GET /containers/*`, `POST` yo'q) | orchestrator (o'qish) |
+| `pm2 jlist/logs`, `pm2_ports`, `nginx -T`, `certbot certificates` | host runner, **o'qish rejimi** | orchestrator (o'qish) |
+| `certbot`, `nginx reload`, `pm2 restart`, `docker restart`, `nginx_site_proxy` | host runner, **faqat tasdiqlangan token bilan** | Telegram/web'da inson tasdig'idan keyin |
+| Health poller | orchestrator ichida, **LLM'siz**, har 15 daqiqada | holat o'zgarsagina tergov boshlaydi |
+
+**Telegram bot alohida konteyner emas.** U orchestrator ichida ishlaydi (grammY long polling): tasdiq tugmalari approvals bazasi va graph resume bilan bog'liq, ikkinchi jarayon bir xil bot tokenini so'rasa Telegram ikkalasiga ham `409 Conflict` qaytaradi.
+
+**Sirlar** faqat `/opt/incidentpulse/secrets/.env` da (root, `chmod 600`). Repo'da faqat nomlar: `.env.production.example`.
+
+---
+
+## 1. Oldindan tekshiruv (hech narsani o'zgartirmaydi)
+
+```bash
+cat /etc/os-release | head -2
+free -h
+df -h / /var/lib/docker
+docker --version && docker compose version
+nginx -v 2>&1
+certbot --version
+certbot plugins 2>&1 | grep -i nginx
+for b in sudo certbot nginx systemctl docker pm2 ss ps tar; do printf '%-10s' "$b"; command -v "$b" || echo "YO'Q"; done
+ss -ltn | grep -E ':(3000|8787|8790|8791)\b' || echo "portlar bo'sh"
+getent hosts incidentpulse.gotrips.cloud
+pm2 jlist | head -c 300; echo
+ls /etc/nginx/sites-enabled/
+```
+
+**Kutilgan natija**
+- Ubuntu, `free -h` da ~4.5 GB bo'sh, `/var/lib/docker` uchun kamida **8 GB** bo'sh joy (Python imijlari katta).
+- Docker va compose versiyalari chiqadi; `certbot plugins` ichida `nginx` bor (apt bilan o'rnatilgan certbot'da yo'q bo'lsa: `apt install python3-certbot-nginx`; snap certbot'da nginx plagini ichiga kiritilgan).
+- Barcha binar'lar yo'li chiqadi. **Yo'llarni yozib oling**: 6.3-qadamda policy'ga kiradi (ayniqsa `certbot` va `pm2`).
+- `portlar bo'sh` chiqadi (3000/8787/8790/8791 band emas).
+- `getent hosts` bitta IP qaytaradi: **shu serverning IP'si** bo'lishi kerak (yo'q bo'lsa, avval DNS A yozuvini qo'shing).
+- `pm2 jlist` ichida `KERVAN` va `KERVAN-REACT` ko'rinadi.
+- `sites-enabled` da faqat `default` (kervan.uz uchun vhost yo'q: muammoning sababi shu).
+
+---
+
+## 2. 2 GB swap qo'shish
+
+Serverda swap yo'q: build yoki boshqa ilova RAM'ni to'ldirsa OOM-killer tasodifiy jarayonni o'ldiradi. Konteynerlar `memswap_limit = mem_limit` bilan swap ishlatmaydi, swap faqat host uchun xavfsizlik yostig'i.
+
+```bash
+swapon --show                      # bo'sh bo'lishi kerak
+fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+sysctl vm.swappiness=10
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-incidentpulse-swap.conf
+free -h
+swapon --show
+```
+
+**Kutilgan natija**: `free -h` da `Swap: 2.0Gi`; `swapon --show` da `/swapfile file 2G`. Qayta yuklashdan keyin ham saqlanadi (`/etc/fstab`).
+
+---
+
+## 3. Repo: read-only GitHub deploy key bilan clone
+
+```bash
+install -d -m 0700 /opt/incidentpulse /opt/incidentpulse/secrets
+ssh-keygen -t ed25519 -N '' -C 'incidentpulse-deploy-readonly' -f /root/.ssh/incidentpulse_deploy
+cat /root/.ssh/incidentpulse_deploy.pub
+```
+
+Chiqqan **ochiq kalit**ni GitHub'da: repo → *Settings → Deploy keys → Add deploy key*. **"Allow write access" belgisini QO'YMANG.** Keyin:
+
+```bash
+export GIT_SSH_COMMAND='ssh -i /root/.ssh/incidentpulse_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
+git clone git@github.com:shohruhinomjonov691-hub/incidentpulse.git /opt/incidentpulse/app
+git -C /opt/incidentpulse/app config core.sshCommand "$GIT_SSH_COMMAND"
+git -C /opt/incidentpulse/app log --oneline -1
+git -C /opt/incidentpulse/app push --dry-run origin HEAD 2>&1 | tail -2
+```
+
+**Kutilgan natija**: clone muvaffaqiyatli; `log` oxirgi commit'ni ko'rsatadi; `push --dry-run` **xato** beradi (`Permission denied` / `The key you are using does not have write access`): kalit haqiqatan read-only ekanini shu tasdiqlaydi.
+
+Aniq versiyani qotirib qo'ying (rollback uchun SHA'ni yozib oling):
+
+```bash
+cd /opt/incidentpulse/app && git rev-parse --short HEAD
+```
+
+---
+
+## 4. Sirlar: `/opt/incidentpulse/secrets/.env`
+
+```bash
+umask 077
+cat > /opt/incidentpulse/secrets/.env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
+REDIS_PASSWORD=$(openssl rand -hex 32)
+WEBHOOK_HMAC_SECRET=$(openssl rand -hex 32)
+DEBATE_SHARED_SECRET=$(openssl rand -hex 32)
+POSTMORTEM_SHARED_SECRET=$(openssl rand -hex 32)
+APPROVAL_HMAC_SECRET=$(openssl rand -hex 32)
+WEB_ADMIN_PASSWORD=$(openssl rand -hex 24)
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.4-mini
+INCIDENT_BUDGET_USD=0.50
+WEEKLY_BUDGET_USD=0.50
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_ALLOWED_USER_IDS=
+EOF
+chmod 600 /opt/incidentpulse/secrets/.env
+chown root:root /opt/incidentpulse/secrets/.env
+stat -c '%a %U:%G %n' /opt/incidentpulse/secrets/.env
+```
+
+**Kutilgan natija**: `600 root:root /opt/incidentpulse/secrets/.env`.
+
+Endi qo'lda to'ldiring (`nano /opt/incidentpulse/secrets/.env`):
+- `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`;
+- `TELEGRAM_ALLOWED_USER_IDS`: tasdiq tugmasini bosa oladigan Telegram **user id**(lar), vergul bilan.
+- `WEB_ADMIN_PASSWORD` allaqachon 48 belgilik tasodifiy; uni parol menejeriga saqlang: `grep ^WEB_ADMIN_PASSWORD /opt/incidentpulse/secrets/.env`.
+
+JSON qiymatlar uchun 5-bo'limga qarang. Hamma qiymatlar to'ldirilganini tekshirish:
+
+```bash
+grep -nE '^(OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|TELEGRAM_ALLOWED_USER_IDS)=$' /opt/incidentpulse/secrets/.env || echo "to'ldirilgan"
+grep -n '<' /opt/incidentpulse/secrets/.env || echo "placeholder qolmagan"
+```
+
+**Kutilgan natija**: ikkala buyruq ham `to'ldirilgan` / `placeholder qolmagan` deydi.
+
+> Sirlar hech qachon git'ga tushmaydi: `.gitignore` da `.env.*` (faqat `.env.example` va `.env.production.example` mustasno) va `secrets/` bor.
+
+---
+
+## 5. Prod allowlist'lar
+
+Ikki **mustaqil** allowlist bor: orchestrator'niki (shu bo'lim, `.env` ichida) va host runner'niki (6.3, `/etc/incidentpulse/actions-policy.json`). Runner orchestrator ruxsat bergan narsani ham rad etishi mumkin; shuning uchun ikkalasi ham kerak.
+
+`.env` oxiriga qo'shing (`<...>` joylariga haqiqiy domen yozing, bilmaydigan loyihani butunlay olib tashlang: u poll ham, tekshiruv ham qilinmaydi):
+
+```bash
+cat >> /opt/incidentpulse/secrets/.env <<'EOF'
+PROJECT_DOMAINS_JSON='{"kervan":["kervan.uz"],"codetrail":["codetrail.gotrips.cloud"],"gotrip":["<GOTRIP_DOMENI>"],"findit":["<FINDIT_DOMENI>"],"food-lens":["<FOODLENS_DOMENI>"],"camera-studio":["<CAMERA_STUDIO_DOMENI>"]}'
+PROJECT_CONTAINERS_JSON='{"codetrail":["codetrail"],"food-lens":["food-lens"],"findit":["findit"],"camera-studio":["live-camera-studio"],"gotrip":["gotrip-"]}'
+PROJECT_PM2_JSON='{"kervan":["KERVAN","KERVAN-REACT"]}'
+PROJECT_ACTION_SCOPES_JSON='{"kervan":{"pm2":["KERVAN","KERVAN-REACT"],"nginx":true,"webroot":"/var/www/html","www":true}}'
+HEALTH_POLL_URLS_JSON=
+EOF
+```
+
+Nima nimani cheklaydi:
+
+| O'zgaruvchi | Ma'nosi |
+|---|---|
+| `PROJECT_DOMAINS_JSON` | 6 loyiha domeni. tls/http/dns tekshiruvlari **faqat** shu domenlarga (va ularning subdomenlariga, masalan `www.`). Poller ham shularni `https://<domen>/` deb tekshiradi. Faqat apex yozing (`kervan.uz`), `www.` o'zi qamrab olinadi. |
+| `PROJECT_CONTAINERS_JSON` | `docker ps/logs` ko'ra oladigan konteyner **nom prefikslari**. `gotrip-` = `gotrip-*`. |
+| `PROJECT_PM2_JSON` | `pm2_list`, `pm2_logs`, `pm2_ports` ko'ra oladigan PM2 ilovalari: faqat `KERVAN`, `KERVAN-REACT`. |
+| `PROJECT_ACTION_SCOPES_JSON` | Tasdiq bilan **o'zgartirish** mumkin bo'lgan narsa. Birinchi chiqarishda **faqat Kervan**: PM2 restart, nginx reload, `nginx_site_proxy`, `certbot_*`. Boshqa loyihalar faqat o'qiladi (qo'shish uchun bu yerga va 6.3 policy'ga aniq nomlarini yozing). `www:true`: sertifikat va vhost `kervan.uz` + `www.kervan.uz` ni qamraydi. |
+| `HEALTH_POLL_URLS_JSON` | Bo'sh = `https://<domen>/`. Aniq health URL kerak bo'lsa: `'{"gotrip":["https://<domen>/api/health"]}'` (URL host'i loyiha domenlari ichida bo'lishi shart, aks holda start bo'lmaydi). |
+
+`webroot` (`/var/www/html`) nginx `/.well-known/acme-challenge/` uchun beradigan papka bo'lishi kerak; Ubuntu'da nginx default papkasi shu. Tekshirish: `ls -ld /var/www/html`.
+
+Poller qoidasi: URL `5xx`, ulanish xatosi yoki TLS xatosi bersa va 10 soniyadan keyin qayta tekshiruv ham xato bersa **Down**. `4xx` (masalan 401/404) ilovaning javobi, nosozlik emas. Tergov faqat holat **o'zgarganda** boshlanadi (ok→down, down→ok yoki birinchi ko'rishda down). O'sha holatda qolgan loyiha token ham, xabar ham sarflamaydi.
+
+Byudjet: tergov boshiga `$0.50`, **haftasiga $0.50** (Dushanba 00:00 Asia/Seoul), xulosa keshi **7 kun**. Poller LLM'ni ishlatmaydi.
+
+---
+
+## 6. Host runner (`incidentpulse-actions`)
+
+### 6.1 Foydalanuvchi va guruh
+
+```bash
+groupadd --system incidentpulse-ipc
+useradd --system --gid incidentpulse-ipc --no-create-home --shell /usr/sbin/nologin incidentpulse-actions
+id incidentpulse-actions
+echo "IPC_GID=$(getent group incidentpulse-ipc | cut -d: -f3)" >> /opt/incidentpulse/secrets/.env
+grep '^IPC_GID=' /opt/incidentpulse/secrets/.env
+```
+
+**Kutilgan natija**: `uid=... (incidentpulse-actions) gid=... (incidentpulse-ipc)`; `IPC_GID=<raqam>`.
+
+### 6.2 Shaxsiy Node 24 (tizim `node`iga tegmaymiz)
+
+Runner TypeScript'ni to'g'ridan-to'g'ri ishga tushiradi, shuning uchun Node 24 kerak. Serverdagi PM2/Kervan Node'i o'zgarmaydi.
+
+```bash
+NODE_VERSION=24.22.3
+case "$(uname -m)" in x86_64) A=x64;; aarch64) A=arm64;; *) echo "noma'lum arxitektura"; false;; esac
+cd /tmp
+curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${A}.tar.xz"
+curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+grep " node-v${NODE_VERSION}-linux-${A}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+mkdir -p /opt/incidentpulse/node
+tar -xJf "node-v${NODE_VERSION}-linux-${A}.tar.xz" -C /opt/incidentpulse/node --strip-components=1
+/opt/incidentpulse/node/bin/node -v
+```
+
+**Kutilgan natija**: `node-v24.22.3-linux-x64.tar.xz: OK` va `v24.22.3`.
+
+### 6.3 Runner kodi va policy
+
+Runner kodi **root egaligida** nusxalanadi (runner o'z kodini o'zgartira olmaydi):
+
+```bash
+rm -rf /opt/incidentpulse/actions-runner
+install -d -m 0755 -o root -g root /opt/incidentpulse/actions-runner
+cp -r /opt/incidentpulse/app/host/actions-runner/src /opt/incidentpulse/app/host/actions-runner/scripts /opt/incidentpulse/actions-runner/
+chown -R root:root /opt/incidentpulse/actions-runner && chmod -R go-w /opt/incidentpulse/actions-runner
+ls /opt/incidentpulse/actions-runner/src
+```
+
+Policy (host'ning o'z allowlist'i):
+
+```bash
+install -d -m 0755 /etc/incidentpulse
+cp /opt/incidentpulse/app/deploy/actions-policy.example.json /etc/incidentpulse/actions-policy.json
+chown root:root /etc/incidentpulse/actions-policy.json && chmod 644 /etc/incidentpulse/actions-policy.json
+for b in certbot nginx systemctl docker pm2 ss ps tar; do printf '%-10s' "$b"; command -v "$b"; done
+nano /etc/incidentpulse/actions-policy.json
+```
+
+`bins` bo'limini 1-qadamdagi **haqiqiy yo'llar** bilan to'ldiring (faqat default'dan farq qilganlarini: masalan `"certbot": "/snap/bin/certbot"`, `"pm2": "/usr/local/bin/pm2"`). `sudo` sudoers aynan shu yo'llarni yozadi. `projects.kervan` ni tekshiring: `domains`, `www`, `pm2`, `webroot` 5-bo'limdagi bilan bir xil bo'lsin.
+
+Policy to'g'riligini va sudoers'ni generatsiya qilib ko'ring:
+
+```bash
+/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json | head -30
+```
+
+**Kutilgan natija**: `# NN exact commands...` sarlavhasi va `/usr/bin/pm2 restart KERVAN`, `/usr/sbin/nginx -T`, `/usr/bin/certbot certificates` kabi qatorlar. Policy xato bo'lsa `PolicyError: ...` chiqadi (qaysi kalit xato ekanini aytadi).
+
+### 6.4 sudoers (faqat aniq buyruqlar)
+
+```bash
+/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json > /tmp/incidentpulse-actions.sudoers
+visudo -cf /tmp/incidentpulse-actions.sudoers
+install -m 0440 -o root -g root /tmp/incidentpulse-actions.sudoers /etc/sudoers.d/incidentpulse-actions
+visudo -c
+sudo -l -U incidentpulse-actions | head -20
+```
+
+**Kutilgan natija**: `parsed OK` (har ikkala `visudo` da); `sudo -l` faqat ro'yxatdagi aniq buyruqlarni ko'rsatadi (`bash`, `sh`, `tee`, `rm`, `*` **yo'q**). Faqat `nginx_site_proxy` yordamchisi qatorida `[0-9]` belgi sinflari bor (4-5 xonali loopback port): yordamchi o'zi ham qayta tekshiradi.
+
+Tekshiruv: sudoers ro'yxatida bo'lmagan buyruq rad etilishi kerak:
+
+```bash
+sudo -u incidentpulse-actions sudo -n /usr/bin/whoami; echo "exit=$?"
+```
+
+**Kutilgan natija**: `sudo: a password is required` (yoki shunga o'xshash) va `exit=1`.
+
+### 6.5 Runner xizmati
+
+Runner faqat `APPROVAL_HMAC_SECRET` ni biladi (token tekshirish uchun); OpenAI/Telegram kalitlari unda yo'q.
+
+```bash
+grep '^APPROVAL_HMAC_SECRET=' /opt/incidentpulse/secrets/.env > /etc/incidentpulse/actions-runner.env
+chown root:root /etc/incidentpulse/actions-runner.env && chmod 600 /etc/incidentpulse/actions-runner.env
+cp /opt/incidentpulse/app/host/actions-runner/deploy/incidentpulse-actions.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now incidentpulse-actions
+sleep 2
+systemctl is-active incidentpulse-actions
+journalctl -u incidentpulse-actions -n 5 --no-pager
+ls -l /run/incidentpulse/
+```
+
+**Kutilgan natija**: `active`; jurnalda `{"event":"listening","socketPath":"/run/incidentpulse/actions.sock","projects":["kervan"]}`; `srw-rw---- 1 incidentpulse-actions incidentpulse-ipc ... actions.sock`.
+
+### 6.6 Runner tekshiruvi (o'qish rejimi)
+
+```bash
+S=/run/incidentpulse/actions.sock
+curl -s --unix-socket $S http://localhost/v1/health; echo
+curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"pm2_jlist"}' http://localhost/v1/read; echo
+curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"pm2_ports"}' http://localhost/v1/read; echo
+curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"nginx_config"}' http://localhost/v1/read; echo
+curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"cert_list"}' http://localhost/v1/read; echo
+curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"pm2_logs","args":{"app":"BOSHQA"}}' http://localhost/v1/read; echo
+```
+
+**Kutilgan natija**
+- `{"ok":true,"projects":1}`
+- `pm2_jlist`: faqat `KERVAN` va `KERVAN-REACT` (boshqa PM2 ilovalari ko'rinmaydi), `status:"online"`.
+- `pm2_ports`: har bir ilova uchun `ports:[...]` (masalan `{"app":"KERVAN","ports":[3000]}`). **Shu Kervan portlarini aniqlash usuli** (12-bo'limga qarang).
+- `nginx_config`: `servers:[]` (kervan.uz uchun server blok yo'q; boshqa saytlar ko'rinmaydi).
+- `cert_list`: `certificates:[]` (kervan.uz sertifikati yo'q; boshqa domenlar sertifikatlari ko'rinmaydi).
+- `pm2_logs` bilan ruxsatsiz ilova: `{"ok":false,"error":"pm2 app is not in the policy"}`.
+
+Agar `pm2_jlist` `PM2_FAILED` bersa: `sudo -n -H /usr/bin/pm2 jlist` ni qo'lda sinang. `pm2` nvm ostida (`/root/.nvm/...`) bo'lsa, sudo'ning `PATH`i `node`ni topolmaydi. Yechim (tizimga tegmaydi): `/usr/local/sbin/ip-pm2` yarating:
+
+```bash
+printf '#!/bin/sh\nexport PATH="/root/.nvm/versions/node/vXX.Y.Z/bin:$PATH"\nexec /root/.nvm/versions/node/vXX.Y.Z/bin/pm2 "$@"\n' > /usr/local/sbin/ip-pm2
+chmod 755 /usr/local/sbin/ip-pm2
+```
+
+keyin policy'da `"pm2": "/usr/local/sbin/ip-pm2"`, 6.4 (sudoers) va `systemctl restart incidentpulse-actions` ni qayta bajaring.
+
+Token bilan himoyani tekshirish (tokensiz tasdiqlangan amal bajarilmasligi kerak):
+
+```bash
+curl -s --unix-socket $S -H 'content-type: application/json' \
+  -d '{"project":"kervan","runbookId":"pm2_restart","params":{"app":"KERVAN"},"approvalId":"AAAAAAAAAAAAAAAA","incidentId":"test","approvalToken":"x","tokenExpiresAt":1}' \
+  http://localhost/v1/runbooks/execute; echo
+pm2 jlist | grep -o '"restart_time":[0-9]*' | head -2
+```
+
+**Kutilgan natija**: `{"ok":false,"error":"Approval token is invalid"}`; `restart_time` o'zgarmagan.
+
+---
+
+## 7. Build
+
+```bash
+cd /opt/incidentpulse/app
+export COMPOSE="docker compose --env-file /opt/incidentpulse/secrets/.env -f compose.prod.yaml"
+export IP_TAG=$(git rev-parse --short HEAD)
+$COMPOSE config --quiet && echo "compose OK"
+$COMPOSE build
+docker image ls | grep -E 'incidentpulse-(app|debate-verifier|postmortem-crew)'
+```
+
+Build ~10–20 daqiqa oladi (pnpm install, Next.js build, Python bog'liqliklari). Boshqa ilovalar sekinlashmasligi uchun kerak bo'lsa `nice -n 10 ionice -c3 $COMPOSE build`.
+
+**Kutilgan natija**: `compose OK`; uchta imij `${IP_TAG}` tegi bilan: `incidentpulse-app`, `incidentpulse-debate-verifier`, `incidentpulse-postmortem-crew`. `intake` xizmati `incidentpulse-app` ni quradi; `orchestrator` va `web` o'sha imijni ishlatadi (qayta qurilmaydi).
+
+---
+
+## 8. Ishga tushirish
+
+Avval runner ishlayotganini tekshiring (6.5), keyin:
+
+```bash
+cd /opt/incidentpulse/app
+$COMPOSE up -d
+sleep 90
+$COMPOSE ps
+```
+
+**Kutilgan natija**: 8 xizmatning hammasi `Up ... (healthy)` (postmortem-crew birinchi marta ~1 daqiqa olishi mumkin). `docker-proxy` va `orchestrator` `dockerapi` tarmog'ida.
+
+```bash
+$COMPOSE logs --tail 30 orchestrator
+```
+
+**Kutilgan natija**: `orchestrator ready` qatori (`actionsEnabled: true, hostRunner: true, healthPoll: true`), keyin `health poll finished`.
+
+Xotira va portlar:
+
+```bash
+docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+ss -ltnp | grep -E ':(3000|5432|6379|8787|8790|8791|2375)\b'
+free -h
+```
+
+**Kutilgan natija**: har bir konteyner o'z limitidan past (`MemPerc` < 85%); `ss` faqat `127.0.0.1:3000` ni ko'rsatadi (postgres/redis/intake/Python/proxy tashqarida ko'rinmaydi); `free -h` da host RAM yetarli.
+
+---
+
+## 9. Web: nginx vhost + certbot
+
+```bash
+cp /opt/incidentpulse/app/deploy/nginx/incidentpulse.gotrips.cloud.conf /etc/nginx/sites-available/incidentpulse.gotrips.cloud.conf
+ln -s /etc/nginx/sites-available/incidentpulse.gotrips.cloud.conf /etc/nginx/sites-enabled/incidentpulse.gotrips.cloud.conf
+nginx -t
+systemctl reload nginx
+curl -sI -H 'Host: incidentpulse.gotrips.cloud' http://127.0.0.1/login | head -3
+```
+
+**Kutilgan natija**: `nginx: configuration file ... test is successful`; `HTTP/1.1 200 OK` (yoki web hali ishga tushmagan bo'lsa `502`: `$COMPOSE ps` ni tekshiring).
+
+Sertifikat (DNS A yozuvi shu serverga qaragan bo'lishi shart):
+
+```bash
+certbot --nginx -d incidentpulse.gotrips.cloud --redirect
+nginx -t
+curl -sI https://incidentpulse.gotrips.cloud/login | head -8
+certbot certificates | grep -A3 incidentpulse
+```
+
+**Kutilgan natija**: `Successfully received certificate`; `HTTP/2 200` va `x-frame-options: DENY`, `x-content-type-options: nosniff`; `certbot certificates` da `incidentpulse.gotrips.cloud` va ~89 kun muddat. `http://` avtomatik `https://` ga yo'naltiriladi. Avto-yangilash: `systemctl list-timers | grep certbot` (yoki `certbot renew --dry-run`).
+
+Brauzerda `https://incidentpulse.gotrips.cloud` → login → `WEB_ADMIN_PASSWORD` (4-qadam). Noto'g'ri parol bir necha marta urinilsa login cheklanadi.
+
+---
+
+## 10. To'liq tekshiruv
+
+**a) Faqat o'qish: Docker proxy POST ni rad etadi**
+```bash
+$COMPOSE exec -T orchestrator docker ps -a --format '{{.Names}}' | head -3
+$COMPOSE exec -T orchestrator docker restart "$(docker ps -q | head -1)" 2>&1 | head -2
+```
+**Kutilgan natija**: birinchisi konteyner nomlarini chiqaradi (proxy nomlarni filtrlamaydi; filtr mcp-infra'da). Ikkinchisi `Forbidden` / `403` xatosi beradi va hech narsa restart bo'lmaydi.
+
+**b) Orchestrator runner'ga yetadi**
+```bash
+$COMPOSE exec -T orchestrator node -e "require('node:http').get({socketPath:'/run/incidentpulse/actions.sock',path:'/v1/health'},r=>r.pipe(process.stdout))"; echo
+```
+**Kutilgan natija**: `{"ok":true,"projects":1}`.
+
+**c) Poller (har 15 daqiqada)**
+```bash
+$COMPOSE logs orchestrator | grep -E 'health poll' | tail -3
+```
+**Kutilgan natija**: `health poll finished` qatorlari (`checked=` loyihalar soni, `changes=` o'zgarishlar). Birinchi ishga tushishda hozir Down bo'lgan loyihalar (Kervan) uchun `changes` 1 bo'ladi va Telegram'ga tergov hisoboti keladi (taxminan $0.01–0.02).
+
+**d) Telegram**: botga `/status` yuboring.
+**Kutilgan natija**: `Tergovlar: faol · pauzada 0` va `Haftalik xarajat: $0.xxxx / $0.50`. Ruxsat etilmagan foydalanuvchi buyruq yuborsa e'tiborga olinmaydi.
+
+**e) Kill-switch**: `/stop` → tergovlar to'xtaydi, `/resume` → davom etadi. Runner'ni butunlay o'chirish (barcha o'zgartirishlar to'xtaydi, o'qish qoladi): `systemctl stop incidentpulse-actions`.
+
+**f) Qo'lda tergov** (keshni chetlab o'tadi, haftalik byudjetdan ayriladi): Telegram'da `/investigate kervan`.
+
+---
+
+## 11. Rollback va yangilash
+
+**Yangilash (xavfsiz tartib)**
+```bash
+cd /opt/incidentpulse/app
+git fetch origin && git log --oneline HEAD..origin/main     # nima kelayotganini ko'ring
+git pull --ff-only
+export IP_TAG=$(git rev-parse --short HEAD)
+$COMPOSE build && $COMPOSE up -d
+```
+Runner kodi o'zgargan bo'lsa (`git diff --stat <eski>..HEAD -- host/`): 6.3 (nusxalash, **eskisini avval saqlang**: `cp -a /opt/incidentpulse/actions-runner /opt/incidentpulse/actions-runner.prev`), 6.4 (sudoers qayta generatsiya), keyin `systemctl restart incidentpulse-actions`.
+
+**Servislarni oldingi versiyaga qaytarish**: eski imijlar diskda qoladi (`IP_TAG` bilan teglangan).
+```bash
+docker image ls | grep incidentpulse-app                      # eski teglar
+git -C /opt/incidentpulse/app checkout <ESKI_SHA>
+export IP_TAG=<ESKI_SHA>
+$COMPOSE up -d
+$COMPOSE ps
+```
+**Kutilgan natija**: barcha xizmatlar yana `healthy`. Ma'lumotlar (`pgdata`, `redisdata`) saqlanadi; jadvallar faqat qo'shiladi (`CREATE TABLE IF NOT EXISTS`), shuning uchun oldingi versiya ularni ko'taradi.
+
+**Runner'ni qaytarish**
+```bash
+systemctl stop incidentpulse-actions
+rm -rf /opt/incidentpulse/actions-runner && mv /opt/incidentpulse/actions-runner.prev /opt/incidentpulse/actions-runner
+# sudoers'ni ham eski policy'dan qayta generatsiya qiling (6.4)
+systemctl start incidentpulse-actions && journalctl -u incidentpulse-actions -n 3 --no-pager
+```
+
+**`nginx_site_proxy` yaratgan vhost'ni qaytarish** (avtomatik rollback faqat xato bo'lganda; keyinroq qo'lda qaytarish uchun):
+```bash
+ls -l /var/backups/incidentpulse/                            # har bir o'zgarishdan oldingi /etc/nginx nusxasi
+rm /etc/nginx/sites-enabled/kervan.uz.conf /etc/nginx/sites-available/kervan.uz.conf
+nginx -t && systemctl reload nginx
+# butun /etc/nginx ni qaytarish kerak bo'lsa:
+# tar -xzf /var/backups/incidentpulse/nginx-<vaqt>.tar.gz -C /etc && nginx -t && systemctl reload nginx
+```
+(`certbot --nginx` vhost'ga TLS qo'shgan bo'lsa, sertifikatni ham olib tashlash: `certbot delete --cert-name kervan.uz`.)
+
+**Hammasini olib tashlash**
+```bash
+$COMPOSE down                       # ma'lumotlar qoladi; o'chirish uchun: down -v
+systemctl disable --now incidentpulse-actions
+rm -f /etc/sudoers.d/incidentpulse-actions /etc/systemd/system/incidentpulse-actions.service
+systemctl daemon-reload && visudo -c
+userdel incidentpulse-actions && groupdel incidentpulse-ipc
+rm -f /etc/nginx/sites-enabled/incidentpulse.gotrips.cloud.conf && nginx -t && systemctl reload nginx
+swapoff /swapfile && sed -i '\#^/swapfile #d' /etc/fstab && rm /swapfile        # faqat swap ham kerak bo'lmasa
+```
+
+---
+
+## 12. Kervan'ni tuzatish rejasi
+
+**Muammo**: `kervan.uz` DNS'i serverga qaraydi, lekin `sites-enabled` da faqat `default` bor. nginx `kervan.uz` so'rovlarini default server bilan javoblaydi: boshqa domen uchun sertifikat (TLS hostname mismatch, masalan `codetrail.gotrips.cloud`) yoki umuman javob yo'q. Sayt PM2 ostida ishlayapti (`KERVAN`, `KERVAN-REACT`), faqat nginx unga yo'l ko'rsatmaydi.
+
+**Oldindan shartlar** (bir marta, qo'lda):
+```bash
+getent hosts kervan.uz www.kervan.uz       # ikkalasi ham shu serverning IP'si (www bo'lmasa: policy va scope'dan "www" ni olib tashlang)
+ls /etc/letsencrypt/accounts/ 2>/dev/null  # certbot akkaunti bor (yo'q bo'lsa: certbot register --agree-tos -m <email>)
+certbot plugins 2>&1 | grep -i nginx       # nginx plagini bor
+curl -sI http://127.0.0.1:80 -H 'Host: kervan.uz' | head -1     # default server javobi
+```
+
+**Avtomatik zanjir va har bir bosqichda nima ro'y beradi:**
+
+| # | Kim | Nima | Siz ko'radigan narsa |
+|---|---|---|---|
+| 1 | Poller (≤15 daq) | `https://kervan.uz/` ga GET → TLS/ulanish xatosi → 10 s dan keyin qayta tekshiruv → **Down** (holat o'zgardi) | `health poll finished ... changes=1` |
+| 2 | Orchestrator | Qat'iy (LLM'siz) probe: `http_probe`, `tls_inspect`, `pm2_list` → kategoriya `tls`; kesh yo'q → tergov | – |
+| 3 | Infra mutaxassisi | `nginx_config` → `kervan.uz vhost=missing`; `cert_list` → `kervan.uz cert=missing`; `tls_inspect` → `hostnameMatch=false` | Dalil qatorlari |
+| 4 | Logs mutaxassisi | `pm2_list` (ikkalasi `online`), `pm2_ports` → `KERVAN ports=…; KERVAN-REACT ports=…` | – |
+| 5 | Debate verifier | Gipoteza "nginx'da kervan.uz vhost'i yo'q, default server javob beryapti" ishonch ≥ 0.7 | – |
+| 6 | Taklif | Ishonchli (LLM'siz) **inventar** (runner): vhost yo'q → faqat `nginx_site_proxy` taklif qilinadi; `upstream` ro'yxati runner topgan portlardan. Dry-run: runner portni tekshiradi, yordamchi `check` rejimida | **Telegram**: `Taklif: nginx_site_proxy(kervan.uz, 127.0.0.1:PORT) · medium · dry-run ✅` + [✅ Bajar] [❌ Rad et] [🔍 Batafsil] |
+| 7 | **Siz** | `🔍 Batafsil` bilan dalil va dry-run'ni o'qing, keyin **✅ Bajar** | `Tasdiqlandi.` |
+| 8 | Runner | Token (HMAC, 15 daq, bir martalik) tekshiriladi → `/etc/nginx` backup → vhost yoziladi → `nginx -t` → reload → `Host: kervan.uz` bilan HTTP tekshiruv; **istalgan xatoda avtomatik rollback** | Natija `Batafsil` da; `/var/backups/incidentpulse/nginx-….tar.gz` |
+| 9 | Recovery tekshiruvi | `https://kervan.uz/` hali ham TLS xatosi (sertifikat yo'q) → tiklanish tasdiqlanmadi → graph yangi taklifga qaytadi (2-urinish) | – |
+| 10 | Taklif #2 | Inventar: **vhost bor, sertifikat yo'q** → faqat `certbot_nginx_issue(kervan.uz)` (`-d kervan.uz -d www.kervan.uz`). Dry-run: `certbot certonly --dry-run --webroot -w /var/www/html …` | **Telegram**: `Taklif: certbot_nginx_issue(kervan.uz) · medium · dry-run ✅` |
+| 11 | **Siz** | **✅ Bajar** | `Tasdiqlandi.` |
+| 12 | Runner | Token tekshiruvi → `certbot --nginx -d kervan.uz -d www.kervan.uz --non-interactive --redirect` → `nginx -t` | – |
+| 13 | Recovery tekshiruvi | `https://kervan.uz/` → 200 → **recovered** | **Telegram: 🟢 tiklandi**, postmortem havolasi |
+| 14 | Postmortem crew | Researcher → Reviewer → Writer, web'da `/postmortems/<id>` | Taxminan $0.004 |
+
+Jami xarajat odatda **$0.02–0.04** (haftalik $0.50 chegarasi ichida). Tasdiqsiz hech narsa o'zgarmaydi; har bir taklif 60 daqiqada muddati o'tadi, token esa 15 daqiqa amal qiladi.
+
+### KERVAN va KERVAN-REACT portlarini qanday aniqlaymiz
+
+Tizim portni **taxmin qilmaydi va modelga topshirmaydi**. Host runner (`pm2_ports`, faqat `KERVAN` va `KERVAN-REACT` uchun) quyidagicha hisoblaydi:
+
+1. `pm2 jlist` → har bir ilovaning `pid` si va holati (faqat `online` ilovalar port egasi bo'ladi).
+2. `ps -eo pid=,ppid=` → shu `pid` ning **barcha avlodlari** (PM2 ko'pincha `npm start`/`sh -c` ni ishga tushiradi, haqiqiy server esa uning bolasi).
+3. `ss -H -ltnp` → ro'yxatdagi TCP tinglovchilar. Egasi shu pid-daraxtda bo'lgan va `127.0.0.1` orqali yetib boriladigan (`0.0.0.0`, `127.0.0.1`, `[::]`) portlar ilovaning portlari.
+4. Natija `127.0.0.1:PORT` ro'yxati: bu **taklif qilinadigan `upstream` qiymatlarining to'liq ro'yxati**. Model boshqa port tanlay olmaydi (tanlasa taklif rad etiladi). Bir nechta bo'lsa, front-end ilova (`KERVAN-REACT`) tanlanadi, bittasi bo'lsa o'sha.
+5. Runner dry-run'da va bajarishdan oldin **yana** tekshiradi: port aynan shu loyihaning PM2 ilovasiga tegishli va `GET http://127.0.0.1:PORT/` `5xx` bermayapti. Yordamchi (root) esa portda haqiqatan tinglovchi borligini va `127.0.0.1` ekanini qayta tekshiradi.
+
+Qo'lda tasdiqlash (har ikkala ilova uchun):
+```bash
+pm2 jlist | grep -E '"name":"KERVAN(-REACT)?"|"pid":' | head
+PIDS=$(pm2 pid KERVAN; pm2 pid KERVAN-REACT)
+ss -H -ltnp | grep -E "pid=($(echo $PIDS | tr ' ' '|'))\b"      # to'g'ridan-to'g'ri egasi bo'lsa
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<PORT>/
+curl -s http://127.0.0.1:<PORT>/ | head -c 300                   # qaysi biri HTML beradi (front-end), qaysi biri API
+```
+(`ss` da bola jarayon pid'i chiqsa, `pstree -p <PM2_PID>` bilan bog'lang; runner buni avtomatik qiladi.)
+
+**Cheklov**: `nginx_site_proxy` bitta `upstream` ga proksilaydi (spetsifikatsiya: `nginx_site_proxy(domain, upstream)`). Agar sayt `/` ni `KERVAN-REACT` dan, `/api` ni `KERVAN` dan olishi kerak bo'lsa, avtomatik bosqichdan keyin vhost'ga qo'lda `location /api/ { proxy_pass http://127.0.0.1:<API_PORT>; }` qo'shing (`nginx -t && systemctl reload nginx`). Fayl `# managed-by: incidentpulse` belgisi bilan boshlanadi.
+
+**Agar zanjir to'xtasa** (hech narsa buzilmaydi, escalate qiladi):
+- Dry-run `Port … is not a listening port of this project's pm2 apps` → pm2 ilova `online` emas yoki port ruxsat etilgan ilovaniki emas: `pm2 jlist`, 6.6.
+- Dry-run `certbot ... --dry-run` xato → DNS (`www`), 80-port firewall, yoki webroot: `curl -s http://kervan.uz/.well-known/acme-challenge/x` 404 bo'lishi kerak (ilovaniki emas, nginx'ning); `www` DNS yo'q bo'lsa `"www"` ni policy va scope'dan olib tashlang.
+- Rollback xabari (`ROLLED BACK (...)`) → sabab shu qatorda; `/etc/nginx` tegmagan holda qaytgan (backup yo'li ham yozilgan).
+- Telegram'da tugma bosilmasa: 60 daqiqadan keyin `tasdiqlash muddati tugadi, inson ko'rigi kutilmoqda`; `/investigate kervan` bilan qayta boshlang.
+
+---
+
+## 13. Muammolar
+
+| Belgi | Sabab va yechim |
+|---|---|
+| Poller hamma loyihani Down deydi (`ETIMEDOUT`) | Konteynerdan host'ning ommaviy IP'siga chiqish UFW tomonidan to'silgan. `ufw allow from 172.16.0.0/12 to any port 80,443 proto tcp`; tekshirish: `$COMPOSE exec orchestrator wget -qO- --spider https://kervan.uz/` |
+| `orchestrator` `unhealthy` | `heartbeat` yangilanmayapti: `$COMPOSE logs --tail 100 orchestrator`. Odatda `.env` dagi noto'g'ri JSON (ConfigError nom bilan aytadi, qiymatni emas). |
+| `IPC_GID` xatosi | `.env` da `IPC_GID=` bo'sh: 6.1. |
+| Orchestrator socket'ga ulana olmaydi (`EACCES`) | `ls -ln /run/incidentpulse` dagi gid `IPC_GID` ga teng bo'lishi kerak; `docker compose up -d --force-recreate orchestrator`. |
+| `pm2_*` `PM2_FAILED` | 6.6 oxiridagi `ip-pm2` yechimi. |
+| `sudo: a password is required` runner jurnalida | policy `bins` yo'li sudoers'dagidan farq qiladi: 6.3 va 6.4 ni qayta bajaring. |
+| `docker compose ps` da `docker-proxy` unhealthy | Imij tegi mavjud emas bo'lsa `docker pull tecnativa/docker-socket-proxy:0.3.0`; boshqa tegni `compose.prod.yaml` da yangilang. |
+| Web `502` | `$COMPOSE ps web`, `curl -sI http://127.0.0.1:3000/login`. |

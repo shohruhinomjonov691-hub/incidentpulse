@@ -22,4 +22,4 @@ Two bullets, with the numbers they rest on. Copy the bullets; keep the "Where th
 
 - It is a small synthetic set designed by the author, so the 14/14 is "the pipeline works on known faults", not accuracy on real incidents. Say "14-scenario fault-injection eval", never "accuracy in production".
 - The category guide was tuned on these scenarios, and one scenario first scored FAIL because of a mistake in the author's own expectation (fixed, re-run, documented in the README).
-- Not deployed yet. It has run only against the local sandbox; the first real incident is the next phase.
+- Not deployed yet. The production deploy is prepared (docs/DEPLOY.md) but has not been run; it has run only against the local sandbox, and the first real incident is the next step.

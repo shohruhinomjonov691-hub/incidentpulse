@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/runner-client": "workspace:*",
     "@incidentpulse/schemas": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:frameworks",
     "pg": "8.23.1",

@@ -19,7 +19,12 @@ export interface PrimaryEvidence {
   injectionFlags: number;
   /** Fixed (non-LLM) probe calls made to build this evidence; for cost and tool-call accounting. */
   toolCalls?: number;
-  health?: { endpoints: Array<{ url: string; ok: boolean }>; containers: Record<string, boolean> };
+  health?: {
+    endpoints: Array<{ url: string; ok: boolean }>;
+    containers: Record<string, boolean>;
+    /** A docker or pm2 probe failed to answer, so container health is unknown rather than healthy. */
+    unknown?: boolean;
+  };
 }
 
 export function hashFacts(value: unknown): string {
@@ -113,6 +118,7 @@ export function createPrimaryProbe(options: ProbeOptions) {
         if (containers[project].length && !categories.has("tls")) {
           const ps = DockerPsResultSchema.parse(await call("docker_ps", {}));
           const ordered = ps.containers.sort((a, b) => a.name.localeCompare(b.name));
+          if (ps.error) health.unknown = true;
           health.containers = Object.fromEntries(
             ordered.map((c) => [
               c.name,
@@ -145,6 +151,7 @@ export function createPrimaryProbe(options: ProbeOptions) {
         if (options.resources.pm2?.[project]?.apps.length && !categories.has("tls")) {
           const pm2 = Pm2ListResultSchema.parse(await call("pm2_list", {}, true));
           const apps = pm2.apps.sort((a, b) => a.name.localeCompare(b.name));
+          if (pm2.error) health.unknown = true;
           for (const app of apps) health.containers[`pm2:${app.name}`] = app.status === "online";
           facts.push({
             pm2: apps.map(({ name, status, restarts }) => ({ name, status, restarts })),

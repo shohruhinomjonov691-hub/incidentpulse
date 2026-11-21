@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import { CodetrailResultSchema, CommitsResultSchema } from "@incidentpulse/mcp-codetrail/schemas";
 import {
+  CertListResultSchema,
   DnsLookupResultSchema,
   DockerLogsResultSchema,
   DockerPsResultSchema,
   HttpProbeResultSchema,
+  NginxConfigResultSchema,
   Pm2ListResultSchema,
+  Pm2LogsResultSchema,
+  Pm2PortsResultSchema,
   TlsInspectResultSchema,
 } from "@incidentpulse/mcp-infra/schemas";
 import type { Redactor } from "@incidentpulse/redact";
@@ -113,6 +117,43 @@ function digestPm2(r: ReturnType<typeof Pm2ListResultSchema.parse>): string {
     .join("; ")}`;
 }
 
+function digestPm2Logs(r: ReturnType<typeof Pm2LogsResultSchema.parse>): string {
+  const head = `pm2_logs(${r.app})`;
+  if (r.error) return `${head}: error=${r.error}`;
+  const interesting = r.lines.filter((l) => INTERESTING.test(l));
+  const picked = [...new Set(interesting.length > 0 ? interesting : r.lines)].slice(-4);
+  return `${head}: ${r.lines.length} lines${picked.length > 0 ? `; key lines: ${picked.map((l) => `«${l.slice(0, 220)}»`).join(" ")}` : ""}`;
+}
+
+function digestPm2Ports(r: ReturnType<typeof Pm2PortsResultSchema.parse>): string {
+  if (r.error) return `pm2_ports: error=${r.error}`;
+  if (r.apps.length === 0) return "pm2_ports: no matching apps";
+  return `pm2_ports: ${r.apps.map((a) => `${a.name} ports=${a.ports.length > 0 ? a.ports.join(",") : "none"}`).join("; ")}`;
+}
+
+// `vhost=missing` / `cert=missing` are the markers the remediation proposer and the reports key on.
+function digestNginxConfig(r: ReturnType<typeof NginxConfigResultSchema.parse>): string {
+  if (r.error) return `nginx_config: error=${r.error}`;
+  return `nginx_config: ${r.hosts
+    .map((h) =>
+      h.vhost
+        ? `${h.host} vhost=present listen=${h.listens.join(",") || "-"} ssl=${h.ssl}${h.proxyPass.length ? ` proxy=${h.proxyPass.join(",")}` : ""}`
+        : `${h.host} vhost=missing`,
+    )
+    .join("; ")}`;
+}
+
+function digestCertList(r: ReturnType<typeof CertListResultSchema.parse>): string {
+  if (r.error) return `cert_list: error=${r.error}`;
+  return `cert_list: ${r.hosts
+    .map((h) =>
+      h.certificate
+        ? `${h.host} cert=present${h.expiresAt ? ` notAfter=${h.expiresAt.slice(0, 10)}` : ""}${h.valid === false ? " valid=false" : ""}`
+        : `${h.host} cert=missing`,
+    )
+    .join("; ")}`;
+}
+
 function digestCodetrail(tool: string, r: ReturnType<typeof CodetrailResultSchema.parse>): string {
   const head = `${tool}(${r.project})`;
   if (r.status !== "ok") return `${head}: status=${r.status}${r.error ? ` error=${r.error}` : ""}`;
@@ -165,6 +206,18 @@ export function buildEvidence(args: {
         break;
       case "pm2_list":
         digest = digestPm2(parse(Pm2ListResultSchema));
+        break;
+      case "pm2_logs":
+        digest = digestPm2Logs(parse(Pm2LogsResultSchema));
+        break;
+      case "pm2_ports":
+        digest = digestPm2Ports(parse(Pm2PortsResultSchema));
+        break;
+      case "nginx_config":
+        digest = digestNginxConfig(parse(NginxConfigResultSchema));
+        break;
+      case "cert_list":
+        digest = digestCertList(parse(CertListResultSchema));
         break;
       case "codetrail_search":
       case "codetrail_explain":

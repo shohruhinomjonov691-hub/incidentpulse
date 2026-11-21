@@ -88,3 +88,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker compose -f compose.yaml config --quiet
+      - name: compose.prod.yaml is valid and stays within the memory budget
+        env:
+          POSTGRES_PASSWORD: x
+          REDIS_PASSWORD: x
+          OPENAI_API_KEY: x
+          TELEGRAM_BOT_TOKEN: x
+          TELEGRAM_CHAT_ID: "1"
+          TELEGRAM_ALLOWED_USER_IDS: "1"
+          WEBHOOK_HMAC_SECRET: x
+          DEBATE_SHARED_SECRET: x
+          POSTMORTEM_SHARED_SECRET: x
+          APPROVAL_HMAC_SECRET: x
+          WEB_ADMIN_PASSWORD: x
+          IPC_GID: "990"
+          PROJECT_DOMAINS_JSON: "{}"
+          PROJECT_CONTAINERS_JSON: "{}"
+          PROJECT_PM2_JSON: "{}"
+          PROJECT_ACTION_SCOPES_JSON: "{}"
+        run: |
+          docker compose -f compose.prod.yaml config --quiet
+          docker compose -f compose.prod.yaml config --format json | python3 -c '
+          import json, sys
+          services = json.load(sys.stdin)["services"]
+          total = sum(int(s["mem_limit"]) for s in services.values()) / 1048576
+          published = [(n, p["host_ip"], p["published"]) for n, s in services.items() for p in s.get("ports", [])]
+          assert all("mem_limit" in s and s.get("restart") == "unless-stopped" and "healthcheck" in s for s in services.values()), "mem_limit, restart and healthcheck are required"
+          assert total <= 2048, f"memory budget exceeded: {total} MiB"
+          assert published == [("web", "127.0.0.1", "3000")], f"only web on 127.0.0.1 may publish a port: {published}"
+          print(f"ok: {len(services)} services, {total:.0f} MiB, published {published}")
+          '

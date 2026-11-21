@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "mcp/*"
+  - "host/*"
   - "packages/*"
 
 # Exact pins (no ^ or ~). Sources and verification date: docs/VERSIONS.md

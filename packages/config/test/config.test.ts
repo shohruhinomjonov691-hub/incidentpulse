@@ -112,3 +112,76 @@ describe("resolveProjectDomains / resolvePricing", () => {
     expect(resolvePricing("gpt-5.4-mini", { input: 9 }).inputPerM).toBe(9);
   });
 });
+
+describe("production settings", () => {
+  const domains = {
+    PROJECT_DOMAINS_JSON: JSON.stringify({ kervan: ["kervan.uz"], gotrip: ["gotrips.example"] }),
+  };
+
+  test("the health poller is off by default and polls https://<domain>/ when on", () => {
+    const off = loadOrchestratorConfig({ ...base, ...domains });
+    expect(off.healthPoll).toEqual({ enabled: false, targets: {} });
+    const on = loadOrchestratorConfig({ ...base, ...domains, HEALTH_POLL_ENABLED: "true" });
+    expect(on.healthPoll.targets).toEqual({
+      kervan: ["https://kervan.uz/"],
+      gotrip: ["https://gotrips.example/"],
+    });
+  });
+
+  test("explicit poll URLs must stay inside the project's domains", () => {
+    const urls = (value: unknown) =>
+      loadOrchestratorConfig({
+        ...base,
+        ...domains,
+        HEALTH_POLL_ENABLED: "true",
+        HEALTH_POLL_URLS_JSON: JSON.stringify(value),
+      });
+    expect(
+      urls({ kervan: ["https://kervan.uz/health", "https://www.kervan.uz/"] }).healthPoll.targets
+        .kervan,
+    ).toHaveLength(2);
+    for (const bad of [
+      { kervan: ["https://evil.example/"] },
+      { kervan: ["https://kervan.uz.evil.example/"] },
+      { kervan: ["http://169.254.169.254/"] },
+      { kervan: ["https://user:pw@kervan.uz/"] },
+      { kervan: ["ftp://kervan.uz/"] },
+      { kervan: ["not a url"] },
+      { codetrail: ["https://kervan.uz/"] },
+    ]) {
+      expect(() => urls(bad)).toThrow(ConfigError);
+    }
+  });
+
+  test("host runner socket, docker host and pm2 apps are validated", () => {
+    const c = loadOrchestratorConfig({
+      ...base,
+      HOST_RUNNER_SOCKET: "/run/incidentpulse/actions.sock",
+      DOCKER_HOST: "tcp://docker-proxy:2375",
+      PROJECT_PM2_JSON: JSON.stringify({ kervan: ["KERVAN", "KERVAN-REACT"] }),
+    });
+    expect(c.hostRunnerSocket).toBe("/run/incidentpulse/actions.sock");
+    expect(c.dockerHost).toBe("tcp://docker-proxy:2375");
+    expect(c.projectPm2.kervan).toEqual(["KERVAN", "KERVAN-REACT"]);
+    expect(() => loadOrchestratorConfig({ ...base, HOST_RUNNER_SOCKET: "relative.sock" })).toThrow(
+      /HOST_RUNNER_SOCKET/,
+    );
+    expect(() => loadOrchestratorConfig({ ...base, DOCKER_HOST: "http://x" })).toThrow(
+      /DOCKER_HOST/,
+    );
+    expect(() =>
+      loadOrchestratorConfig({ ...base, PROJECT_PM2_JSON: '{"kervan":["a b"]}' }),
+    ).toThrow(/PROJECT_PM2_JSON/);
+  });
+
+  test("action scopes accept www", () => {
+    const c = loadOrchestratorConfig({
+      ...base,
+      ...domains,
+      PROJECT_ACTION_SCOPES_JSON: JSON.stringify({
+        kervan: { nginx: true, webroot: "/var/www/acme", www: true },
+      }),
+    });
+    expect(c.actionScopes.kervan).toMatchObject({ www: true, domains: ["kervan.uz"] });
+  });
+});

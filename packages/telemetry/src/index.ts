@@ -24,6 +24,21 @@ export function langfuseEnabled(env: TelemetryEnv): boolean {
   return Boolean(env.LANGFUSE_PUBLIC_KEY?.trim() && env.LANGFUSE_SECRET_KEY?.trim());
 }
 
+/**
+ * True when a configured base URL would send keys and incident data in cleartext: anything that is
+ * not https and not loopback. Tracing then stays OFF rather than leaking over plain HTTP.
+ */
+export function insecureBaseUrl(env: TelemetryEnv): boolean {
+  const raw = env.LANGFUSE_BASE_URL?.trim() || env.LANGFUSE_HOST?.trim();
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    return url.protocol !== "https:" && !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  } catch {
+    return true;
+  }
+}
+
 export interface ObserveOptions {
   incidentId: string;
   name: string;
@@ -110,7 +125,7 @@ export async function startTelemetry(
   env: TelemetryEnv,
   options: StartTelemetryOptions = {},
 ): Promise<Telemetry> {
-  if (!langfuseEnabled(env)) return noopTelemetry;
+  if (!langfuseEnabled(env) || insecureBaseUrl(env)) return noopTelemetry;
   const redact = options.redact ?? ((text: string) => text);
   try {
     // Imported lazily so the "off" path never loads the OpenTelemetry SDK.

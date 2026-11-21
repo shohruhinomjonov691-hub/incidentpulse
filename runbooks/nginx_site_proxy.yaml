@@ -1,0 +1,10 @@
+id: nginx_site_proxy
+category: http_5xx
+risk: medium
+# Creates an HTTP vhost (with the ACME webroot location) that proxies to a local upstream.
+# Only the host actions runner executes it: backup of /etc/nginx, template, nginx -t, reload, and an
+# automatic rollback on any error. The upstream must be a loopback port of one of the project's pm2 apps.
+remote_only: true
+params: { domain: domains, upstream: upstreams }
+dry_run: []
+run: []

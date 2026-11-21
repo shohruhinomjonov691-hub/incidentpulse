@@ -167,7 +167,8 @@
             "nginx_reload",
             "docker_restart",
             "pm2_restart",
-            "docker_compose_up"
+            "docker_compose_up",
+            "nginx_site_proxy"
           ]
         },
         "params": {

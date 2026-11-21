@@ -1,0 +1,16 @@
+{
+  "projects": {
+    "kervan": {
+      "domains": ["kervan.uz"],
+      "www": true,
+      "pm2": ["KERVAN", "KERVAN-REACT"],
+      "nginx": true,
+      "webroot": "/var/www/html"
+    }
+  },
+  "bins": {
+    "pm2": "/usr/bin/pm2"
+  },
+  "installDir": "/opt/incidentpulse/actions-runner",
+  "upstreamPortMin": 1024
+}

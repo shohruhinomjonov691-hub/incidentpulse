@@ -6,11 +6,12 @@ import {
   createApprovalCallbacks,
   dryRun,
   ExecutionResultSchema,
+  type RemoteExecutor,
   type ResolvedRunbook,
   type RunbookRegistry,
 } from "@incidentpulse/mcp-actions";
 import type { Redactor } from "@incidentpulse/redact";
-import { PROJECT_DISPLAY_NAMES } from "@incidentpulse/schemas";
+import { PROJECT_DISPLAY_NAMES, type ProjectId } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -46,17 +47,26 @@ export async function createActionFlow(options: {
   approvals: ApprovalStore;
   registry: RunbookRegistry;
   controls: ActionControls;
-  run: ActionRunner;
+  /** Local step runner (sandbox, tests). Production passes `remote` instead. */
+  run?: ActionRunner;
+  /** Production: the host actions runner. */
+  remote?: RemoteExecutor;
   redact: Redactor;
   notifier: Notifier;
   callbackSecret: string;
 }) {
-  const { approvals, registry, controls, run, redact, notifier } = options;
+  const { approvals, registry, controls, remote, redact, notifier } = options;
+  const run: ActionRunner =
+    options.run ??
+    (async () => {
+      throw new Error("No local action runner is configured");
+    });
   const callbacks = createApprovalCallbacks(options.callbackSecret);
   const server = createActionsServer({
     registry,
     approvals,
-    run,
+    ...(options.run ? { run: options.run } : {}),
+    ...(remote ? { remote } : {}),
     redact,
     isStopped: controls.isStopped,
   });
@@ -68,7 +78,8 @@ export async function createActionFlow(options: {
   return {
     approvals,
     controls,
-    dryRun: (book: ResolvedRunbook) => dryRun(book, run, redact),
+    dryRun: (book: ResolvedRunbook, project: ProjectId) =>
+      remote ? remote.dryRun(project, book) : dryRun(book, run, redact),
     async notify(
       approval: Approval,
       state: GraphState,
@@ -111,6 +122,7 @@ export async function createActionFlow(options: {
             runbookId: approval.runbookId,
             params: approval.params,
             approvalToken,
+            tokenExpiresAt: approvals.tokenExpiry(approval),
           },
         },
         undefined,

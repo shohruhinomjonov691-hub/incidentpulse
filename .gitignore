@@ -17,6 +17,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!.env.production.example
 secrets/
 .DS_Store
 

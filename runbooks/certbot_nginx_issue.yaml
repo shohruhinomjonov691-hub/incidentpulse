@@ -3,8 +3,9 @@ category: tls
 risk: medium
 params: { domain: domains }
 prerequisite: missing_certificate_or_vhost
+# {domainArgs} is "-d <domain>" plus "-d www.<domain>" when the project scope sets www.
 dry_run:
-  - [certbot, certonly, --dry-run, --non-interactive, --webroot, -w, "{webroot}", -d, "{domain}"]
+  - [certbot, certonly, --dry-run, --non-interactive, --webroot, -w, "{webroot}", "{domainArgs}"]
 run:
-  - [certbot, --nginx, -d, "{domain}", --non-interactive]
+  - [certbot, --nginx, "{domainArgs}", --non-interactive, --redirect]
   - [nginx, -t]

@@ -81,6 +81,9 @@ export function createApprovalStore(pool: Pool, secret: string, now = () => new 
     ]);
 
   return {
+    /** Epoch ms at which the approval's token expires (the value the host runner verifies). */
+    tokenExpiry: (approval: Approval) => expiryOf(approval).getTime(),
+
     async setup() {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS incidentpulse_approvals (

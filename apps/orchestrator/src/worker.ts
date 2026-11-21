@@ -10,6 +10,12 @@ import type { Notifier } from "@incidentpulse/telegram-bot";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import {
+  HEALTH_POLL_EVERY_MINUTES,
+  HEALTH_POLL_JOB,
+  HEALTH_POLL_SCHEDULER,
+  type HealthPoller,
+} from "./health-poller.ts";
+import {
   DAILY_RECHECK_SCHEDULER_NAME,
   type InvestigationPolicy,
   MANUAL_JOB_NAME,
@@ -31,6 +37,8 @@ export interface WorkerOptions {
   log: Logger;
   queueName?: string;
   onResume?(request: ResumeRequest): Promise<void>;
+  /** LLM-free health poller, run every 15 minutes inside the single-concurrency worker. */
+  healthPoller?: HealthPoller;
 }
 
 /** The shared queue serializes observation, scheduling, and investigation across worker processes. */
@@ -52,10 +60,39 @@ export async function createIncidentWorker(options: WorkerOptions) {
     { name: schedulerName, opts: INCIDENT_JOB_OPTIONS },
   );
 
+  // The poller runs as a job of this queue, so it is serialized with investigations (global concurrency 1).
+  if (options.healthPoller) {
+    await queue.upsertJobScheduler(
+      HEALTH_POLL_SCHEDULER,
+      { pattern: `0 */${HEALTH_POLL_EVERY_MINUTES} * * * *` },
+      {
+        name: HEALTH_POLL_JOB,
+        opts: { attempts: 1, removeOnComplete: true, removeOnFail: { age: 86_400 } },
+      },
+    );
+    // Look once right after a start (a restart must not hide an outage for up to 15 minutes).
+    await queue.add(
+      HEALTH_POLL_JOB,
+      {},
+      {
+        attempts: 1,
+        removeOnComplete: true,
+        removeOnFail: { age: 86_400 },
+        jobId: `${HEALTH_POLL_JOB}-boot-${Date.now()}`,
+      },
+    );
+  } else {
+    await queue.removeJobScheduler(HEALTH_POLL_SCHEDULER);
+  }
+
   const RESUME_JOB = "graph-resume";
   const worker = new Worker(
     queueName,
     async (job) => {
+      if (job.name === HEALTH_POLL_JOB) {
+        await options.healthPoller?.run();
+        return;
+      }
       if (job.name === WEEKLY_SCHEDULER_NAME || job.name === DAILY_RECHECK_SCHEDULER_NAME) {
         if (job.name !== schedulerName) return;
         const active = await investigations.active();

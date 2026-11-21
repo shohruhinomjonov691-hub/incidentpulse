@@ -23,6 +23,7 @@ export const RunbookIdSchema = z.enum([
   "docker_restart",
   "pm2_restart",
   "docker_compose_up",
+  "nginx_site_proxy",
 ]);
 
 export const CategorySchema = z.enum([

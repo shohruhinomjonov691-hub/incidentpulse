@@ -1,0 +1,34 @@
+[Unit]
+Description=IncidentPulse host actions runner (read-only host data + approved runbooks)
+Documentation=file:///opt/incidentpulse/app/host/actions-runner/README.md
+After=network.target
+
+[Service]
+Type=simple
+User=incidentpulse-actions
+Group=incidentpulse-ipc
+# APPROVAL_HMAC_SECRET only. root:root 0600 (systemd reads it as root). Never the LLM or Telegram credentials.
+EnvironmentFile=/etc/incidentpulse/actions-runner.env
+Environment=ACTIONS_RUNNER_POLICY=/etc/incidentpulse/actions-policy.json
+Environment=ACTIONS_RUNNER_SOCKET=/run/incidentpulse/actions.sock
+Environment=ACTIONS_RUNNER_STATE_DIR=/var/lib/incidentpulse-actions
+# /run/incidentpulse (0750, group incidentpulse-ipc) holds the socket; the orchestrator container mounts it.
+RuntimeDirectory=incidentpulse
+RuntimeDirectoryMode=0750
+# Keep /run/incidentpulse across restarts: the orchestrator container bind-mounts the directory, and a
+# recreated directory would leave it looking at a deleted one.
+RuntimeDirectoryPreserve=yes
+StateDirectory=incidentpulse-actions
+StateDirectoryMode=0700
+ExecStart=/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/src/main.ts
+Restart=always
+RestartSec=3
+# Deliberately NOT sandboxed with NoNewPrivileges / ProtectSystem / ProtectHome: the runner reaches root
+# only through `sudo -n` rules for exact commands, and those commands (nginx, certbot, pm2) need
+# /etc, /var and /root. The boundary is: dedicated user + exact sudoers + socket permissions + approval token.
+PrivateTmp=yes
+LimitNOFILE=1024
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

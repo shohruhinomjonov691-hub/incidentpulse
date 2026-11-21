@@ -1,17 +1,20 @@
+import { writeFile } from "node:fs/promises";
 import type { loadOrchestratorConfig } from "@incidentpulse/config";
 import {
   type ActionRunner,
   createApprovalStore,
+  createRemoteExecutor,
   createSystemRunner,
   loadRunbookRegistry,
 } from "@incidentpulse/mcp-actions";
 import { describeError, type Redactor } from "@incidentpulse/redact";
+import { createRunnerClient } from "@incidentpulse/runner-client";
 import {
   createInvestigationBot,
   createTelegramNotifier,
   type Notifier,
 } from "@incidentpulse/telegram-bot";
-import { startTelemetry } from "@incidentpulse/telemetry";
+import { langfuseEnabled, startTelemetry } from "@incidentpulse/telemetry";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { OpenAIProvider } from "@openai/agents";
 import { Redis } from "ioredis";
@@ -24,6 +27,8 @@ import { createTriage } from "./agents/triage.ts";
 import { createContinuations } from "./continuations.ts";
 import { createDebateVerifier } from "./debate.ts";
 import { buildIncidentGraph } from "./graph.ts";
+import { createHealthPoller } from "./health-poller.ts";
+import { createHostInventory } from "./host-inventory.ts";
 import { createInvestigationPolicy } from "./investigation-policy.ts";
 import { createJournal } from "./journal.ts";
 import type { Logger } from "./log.ts";
@@ -56,6 +61,9 @@ export async function startRuntime(options: {
   });
   setTelemetry(tracing);
   if (tracing.enabled) log.info("langfuse tracing enabled");
+  else if (langfuseEnabled(process.env)) {
+    log.error("langfuse keys are set but tracing is OFF (plain-HTTP base URL or startup failure)");
+  }
   const redis = new Redis(config.redisUrl);
   const controls = createActionControls(redis, prefix);
   const budgetPrefix = prefix ? `${prefix}:budget:weekly` : undefined;
@@ -84,21 +92,37 @@ export async function startRuntime(options: {
     modelName: config.model,
   });
 
+  // Production: read-only Docker through the socket proxy, host facts and runbooks through the host runner.
+  const runnerClient = config.hostRunnerSocket
+    ? createRunnerClient({ socketPath: config.hostRunnerSocket })
+    : undefined;
+  const remote = runnerClient ? createRemoteExecutor(runnerClient) : undefined;
+  const childEnv = {
+    ...(config.dockerHost ? { DOCKER_HOST: config.dockerHost } : {}),
+    ...(config.hostRunnerSocket ? { INFRA_HOST_RUNNER_SOCKET: config.hostRunnerSocket } : {}),
+    ...options.childEnv,
+  };
   const agentOptions = {
     model,
     pricing: config.pricing,
     redact,
     injectionMode: config.injectionMode,
     reasoningEffort: "low",
-    ...(options.childEnv ? { childEnv: options.childEnv } : {}),
+    ...(Object.keys(childEnv).length ? { childEnv } : {}),
     resources: {
       domains: config.projectDomains,
       containers: config.projectContainers,
+      pm2: Object.fromEntries(
+        Object.entries(config.projectPm2).map(([project, apps]) => [project, { apps }]),
+      ),
+      ...(runnerClient ? { hostRunner: true } : {}),
       codetrail: config.codetrail,
     },
   } as const;
   const probe = createPrimaryProbe(agentOptions);
-  const registry = config.actionsEnabled ? loadRunbookRegistry(config.actionScopes) : undefined;
+  const registry = config.actionsEnabled
+    ? loadRunbookRegistry(config.actionScopes, undefined, { remote: Boolean(remote) })
+    : undefined;
   const pool = new Pool({
     connectionString: config.databaseUrl,
     connectionTimeoutMillis: 2000,
@@ -117,7 +141,9 @@ export async function startRuntime(options: {
           approvals,
           registry,
           controls,
-          run: options.actionRunner ?? createSystemRunner(config.actionExecUser ?? ""),
+          ...(remote
+            ? { remote }
+            : { run: options.actionRunner ?? createSystemRunner(config.actionExecUser ?? "") }),
           redact,
           notifier,
           callbackSecret: config.approvalSecret,
@@ -162,6 +188,9 @@ export async function startRuntime(options: {
               model,
               pricing: config.pricing,
               redact,
+              ...(runnerClient
+                ? { inventory: createHostInventory(runnerClient, config.actionScopes) }
+                : {}),
             }),
             recover: createRecoveryCheck(probe),
           },
@@ -179,6 +208,18 @@ export async function startRuntime(options: {
     ...(prefix ? { prefix: `${prefix}:investigation` } : {}),
     ...(approvals ? { closeApproval: approvals.closeForRecovery } : {}),
   });
+  const healthPoller = config.healthPoll.enabled
+    ? createHealthPoller({
+        redis,
+        targets: config.healthPoll.targets,
+        allowedHosts: config.projectDomains,
+        notifier,
+        redact,
+        log,
+        monitor: investigations.monitor,
+        ...(prefix ? { prefix: `${prefix}:health` } : {}),
+      })
+    : undefined;
   const continuations = createContinuations({
     graph,
     controls,
@@ -193,6 +234,7 @@ export async function startRuntime(options: {
     redact,
     log,
     onResume: continuations.resume,
+    ...(healthPoller ? { healthPoller } : {}),
     ...(prefix ? { queueName: prefix } : {}),
   });
 
@@ -208,9 +250,19 @@ export async function startRuntime(options: {
       });
     return ticking;
   };
+  // Liveness for the container healthcheck: touched at most every 30 s while the event loop is alive.
+  const heartbeatFile = process.env.HEARTBEAT_FILE;
+  let lastBeat = 0;
+  const beat = () => {
+    if (!heartbeatFile || Date.now() - lastBeat < 30_000) return;
+    lastBeat = Date.now();
+    void writeFile(heartbeatFile, `${lastBeat}\n`).catch(() => undefined);
+  };
   const timer = setInterval(() => {
+    beat();
     void tick();
   }, 2500);
+  beat();
   void tick();
 
   const postmortemConfig = options.postmortem ?? {
@@ -276,6 +328,8 @@ export async function startRuntime(options: {
     investigateMode: config.investigateMode,
     debateMode: config.debateMode,
     actionsEnabled: config.actionsEnabled,
+    hostRunner: Boolean(runnerClient),
+    healthPoll: config.healthPoll.enabled,
   });
 
   return {

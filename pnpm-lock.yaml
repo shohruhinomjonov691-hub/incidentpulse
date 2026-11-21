@@ -309,6 +309,9 @@ importers:
       '@incidentpulse/redact':
         specifier: workspace:*
         version: link:../../packages/redact
+      '@incidentpulse/runner-client':
+        specifier: workspace:*
+        version: link:../../packages/runner-client
       '@incidentpulse/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -442,11 +445,35 @@ importers:
         specifier: 'catalog:'
         version: 5.1.1(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
 
+  host/actions-runner:
+    devDependencies:
+      '@incidentpulse/mcp-actions':
+        specifier: workspace:*
+        version: link:../../mcp/actions
+      '@incidentpulse/runner-client':
+        specifier: workspace:*
+        version: link:../../packages/runner-client
+      '@incidentpulse/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.1(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
+
   mcp/actions:
     dependencies:
       '@incidentpulse/redact':
         specifier: workspace:*
         version: link:../../packages/redact
+      '@incidentpulse/runner-client':
+        specifier: workspace:*
+        version: link:../../packages/runner-client
       '@incidentpulse/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -503,6 +530,9 @@ importers:
       '@incidentpulse/redact':
         specifier: workspace:*
         version: link:../../packages/redact
+      '@incidentpulse/runner-client':
+        specifier: workspace:*
+        version: link:../../packages/runner-client
       '@modelcontextprotocol/sdk':
         specifier: catalog:frameworks
         version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
@@ -540,6 +570,18 @@ importers:
         version: 5.1.1(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
 
   packages/redact:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.1(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
+
+  packages/runner-client:
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

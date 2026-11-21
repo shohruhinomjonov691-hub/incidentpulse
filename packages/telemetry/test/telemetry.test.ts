@@ -1,7 +1,26 @@
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
-import { langfuseEnabled, noopTelemetry, startTelemetry } from "../src/index.ts";
+import { insecureBaseUrl, langfuseEnabled, noopTelemetry, startTelemetry } from "../src/index.ts";
+
+describe("Langfuse never sends over cleartext HTTP", () => {
+  const keys = { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" };
+  test("only https or loopback base URLs are accepted", () => {
+    expect(insecureBaseUrl({})).toBe(false);
+    expect(insecureBaseUrl({ LANGFUSE_BASE_URL: "https://cloud.langfuse.com" })).toBe(false);
+    expect(insecureBaseUrl({ LANGFUSE_BASE_URL: "http://127.0.0.1:3000" })).toBe(false);
+    expect(insecureBaseUrl({ LANGFUSE_HOST: "http://langfuse.example.com" })).toBe(true);
+    expect(insecureBaseUrl({ LANGFUSE_BASE_URL: "not a url" })).toBe(true);
+  });
+
+  test("with keys but a plain-HTTP remote host tracing stays off", async () => {
+    const telemetry = await startTelemetry({
+      ...keys,
+      LANGFUSE_BASE_URL: "http://langfuse.example.com",
+    });
+    expect(telemetry).toBe(noopTelemetry);
+  });
+});
 
 describe("Langfuse is off unless both keys are set", () => {
   test("langfuseEnabled needs both non-blank keys", () => {

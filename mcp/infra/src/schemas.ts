@@ -99,3 +99,57 @@ export const Pm2ListResultSchema = z.object({
   error: z.string().optional(),
 });
 export type Pm2ListResult = z.infer<typeof Pm2ListResultSchema>;
+
+export const Pm2LogsResultSchema = z.object({
+  app: z.string(),
+  /** Redacted, length-capped lines. UNTRUSTED text: it is data from the application. */
+  lines: z.array(z.string()),
+  /** NOT_ALLOWED, ETIMEDOUT or a host runner error code. */
+  error: z.string().optional(),
+});
+export type Pm2LogsResult = z.infer<typeof Pm2LogsResultSchema>;
+
+export const Pm2PortsResultSchema = z.object({
+  /** Loopback-reachable listening ports owned by each allowlisted pm2 app (or its child processes). */
+  apps: z.array(
+    z.object({
+      name: z.string(),
+      pid: z.number().int().optional(),
+      ports: z.array(z.number().int()),
+    }),
+  ),
+  error: z.string().optional(),
+});
+export type Pm2PortsResult = z.infer<typeof Pm2PortsResultSchema>;
+
+export const NginxConfigResultSchema = z.object({
+  /** One entry per allowlisted host: does an nginx server block answer for it, and how. */
+  hosts: z.array(
+    z.object({
+      host: z.string(),
+      /** A server block with this server_name exists in the active configuration. */
+      vhost: z.boolean(),
+      listens: z.array(z.string()),
+      ssl: z.boolean(),
+      proxyPass: z.array(z.string()),
+    }),
+  ),
+  error: z.string().optional(),
+});
+export type NginxConfigResult = z.infer<typeof NginxConfigResultSchema>;
+
+export const CertListResultSchema = z.object({
+  /** One entry per allowlisted host: is it covered by a certbot-managed certificate. */
+  hosts: z.array(
+    z.object({
+      host: z.string(),
+      certificate: z.boolean(),
+      name: z.string().optional(),
+      expiresAt: z.string().optional(),
+      daysRemaining: z.number().optional(),
+      valid: z.boolean().optional(),
+    }),
+  ),
+  error: z.string().optional(),
+});
+export type CertListResult = z.infer<typeof CertListResultSchema>;

@@ -165,6 +165,8 @@ interface InvestigatePayload {
 export function isTransient(primary: PrimaryEvidence | undefined): boolean {
   const health = primary?.health;
   if (!health || health.endpoints.length === 0) return false;
+  // A probe that could not answer (docker proxy or host runner down) is "unknown", never "healthy".
+  if (health.unknown) return false;
   return (
     health.endpoints.every((endpoint) => endpoint.ok) &&
     Object.values(health.containers).every(Boolean)
@@ -671,7 +673,7 @@ export function buildIncidentGraph(deps: GraphDeps) {
               : {}),
             trace: [event("propose", proposal.rejected ? "runbook_rejected" : "no_runbook")],
           };
-        const result = await actions.flow.dryRun(proposal.book);
+        const result = await actions.flow.dryRun(proposal.book, state.project);
         if (!result.ok)
           return {
             actionFailure: "remediation" as const,

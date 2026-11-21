@@ -11,7 +11,9 @@ import type { Category, Evidence, ProjectId } from "@incidentpulse/schemas";
  * do not correlate.
  */
 
-const TOOLS = new Set(["tls_inspect", "http_probe", "dns_lookup", "docker_ps", "docker_logs"]);
+// Fixed probes only. docker_logs / pm2_logs excerpts are untrusted application text: a log line that
+// says "error=CERT_HAS_EXPIRED" must not be able to make two projects look like they share a cause.
+const TOOLS = new Set(["tls_inspect", "http_probe", "dns_lookup", "docker_ps"]);
 const SPECIFIC = new Set(["error", "certError", "notAfter", "issuer"]);
 
 function tokensOf(excerpt: string): string[] {

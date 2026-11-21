@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { ApprovalStore, ExecutionResult } from "./approvals.ts";
 import type { ActionProgram, ActionStep, ResolvedRunbook, RunbookRegistry } from "./registry.ts";
 import { RunbookChoiceSchema } from "./registry.ts";
+import type { RemoteExecutor } from "./remote.ts";
 
 const exec = promisify(execFile);
 const BINARIES: Record<ActionProgram, string> = {
@@ -74,6 +75,8 @@ export const ExecutionRequestSchema = RunbookChoiceSchema.extend({
   incidentId: z.string().min(1).max(150),
   project: ProjectIdSchema,
   approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  /** Epoch ms the token expires; required to execute through the host runner, which re-verifies it. */
+  tokenExpiresAt: z.number().int().positive().optional(),
 });
 export const ExecutionResultSchema = z.strictObject({
   ok: z.boolean(),
@@ -83,11 +86,19 @@ export const ExecutionResultSchema = z.strictObject({
 export function createActionsServer(options: {
   registry: RunbookRegistry;
   approvals: ApprovalStore;
-  run: ActionRunner;
+  /** Local step runner (sandbox, tests). Not used when `remote` is set. */
+  run?: ActionRunner;
+  /** Production: the host actions runner executes the runbook after re-verifying the token. */
+  remote?: RemoteExecutor;
   redact: Redactor;
   isStopped(): Promise<boolean>;
 }) {
-  const { registry, approvals, run, redact, isStopped } = options;
+  const { registry, approvals, remote, redact, isStopped } = options;
+  const run: ActionRunner =
+    options.run ??
+    (async () => {
+      throw new Error("No local action runner is configured");
+    });
   const server = new McpServer({ name: "mcp-actions", version: "1.0.0" });
   server.registerTool(
     "execute_runbook",
@@ -110,20 +121,39 @@ export function createActionsServer(options: {
       });
       let book: ResolvedRunbook;
       try {
-        book = registry.resolve(request.project, {
-          runbookId: request.runbookId,
-          params: request.params,
-        });
+        // The approved upstream is bound by the token and the approval row; the host runner re-verifies it.
+        const approvedUpstream = request.params.upstream;
+        book = registry.resolve(
+          request.project,
+          { runbookId: request.runbookId, params: request.params },
+          approvedUpstream ? { upstreams: [approvedUpstream] } : undefined,
+        );
       } catch {
         return reply({ ok: false, output: "Runbook or parameters denied" });
       }
       if (await isStopped()) return reply({ ok: false, output: "Actions are paused" });
+      if (book.remoteOnly && !remote) {
+        return reply({ ok: false, output: "This runbook needs the host actions runner" });
+      }
+      if (remote && !request.tokenExpiresAt) {
+        return reply({ ok: false, output: "Token expiry is required for the host runner" });
+      }
       if (!(await approvals.claim(request))) {
         return reply({ ok: false, output: "Approval token is invalid, expired or already used" });
       }
 
       const output: string[] = [];
       let result: ExecutionResult;
+      if (remote) {
+        try {
+          const outcome = await remote.execute(request, book);
+          result = { ok: outcome.ok, output: redact(outcome.output).trim().slice(0, 4000) || "OK" };
+        } catch (error) {
+          result = { ok: false, output: describeError(error, redact).slice(0, 4000) };
+        }
+        await approvals.complete(request.approvalId, result);
+        return reply(result);
+      }
       try {
         if (book.prerequisite) await confirmPrerequisite(book, run);
         for (const step of book.run) {

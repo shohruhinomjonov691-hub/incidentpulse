@@ -29,6 +29,7 @@
     "@incidentpulse/mcp-codetrail": "workspace:*",
     "@incidentpulse/mcp-infra": "workspace:*",
     "@incidentpulse/redact": "workspace:*",
+    "@incidentpulse/runner-client": "workspace:*",
     "@incidentpulse/schemas": "workspace:*",
     "@incidentpulse/telegram-bot": "workspace:*",
     "@incidentpulse/telemetry": "workspace:*",

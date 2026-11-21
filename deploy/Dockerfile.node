@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# One image for the Node services (intake, orchestrator, web). compose.prod.yaml picks the command.
+# Node 24 runs the TypeScript sources directly (type stripping); only the web app needs a build.
+FROM node:24-alpine AS base
+ENV PNPM_HOME=/pnpm \
+    PNPM_STORE_DIR=/pnpm/store \
+    PATH=/pnpm:$PATH \
+    CI=true \
+    NEXT_TELEMETRY_DISABLED=1
+# docker-cli: mcp-infra runs `docker ps` / `docker logs` against DOCKER_HOST (the read-only socket proxy).
+RUN apk add --no-cache docker-cli tini && corepack enable
+WORKDIR /app
+
+FROM base AS build
+COPY . .
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+RUN pnpm --filter @incidentpulse/web build
+
+FROM base AS app
+ENV NODE_ENV=production
+COPY --from=build --chown=node:node /app /app
+USER node
+# tini reaps the MCP child processes the orchestrator spawns.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "apps/orchestrator/src/main.ts"]

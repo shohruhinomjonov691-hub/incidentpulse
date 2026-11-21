@@ -166,6 +166,8 @@ Telegram needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `TELEGRAM_ALLOWED_US
 ```
 apps/       orchestrator, intake, web, telegram-bot      TypeScript
 mcp/        infra, codetrail, actions                    TypeScript MCP servers
+host/       actions-runner                               systemd service on the VPS (sudoers + unix socket, no dependencies)
+deploy/     Dockerfiles, nginx vhost, runner policy      used by compose.prod.yaml
 packages/   schemas, redact, config, telemetry           TypeScript (schemas generate the JSON Schema Python validates)
 services/   debate-verifier, postmortem-crew             Python 3.12, FastAPI
 runbooks/   sandbox/   evals/   templates/   docs/
@@ -173,4 +175,4 @@ runbooks/   sandbox/   evals/   templates/   docs/
 
 Design: [docs/SPEC.md](docs/SPEC.md) · decisions: [docs/adr/](docs/adr/) · pinned versions: [docs/VERSIONS.md](docs/VERSIONS.md) · sandbox details and per-phase results: [sandbox/README.md](sandbox/README.md).
 
-**Status: Phase 6 of 7 done** (skeleton, RCA, multi-agent, debate loop, human-approved actions, postmortem + UI, evals + observability). Phase 7 (deploying to a VPS and closing a real incident) has not started: everything above ran locally against the sandbox.
+**Status: Phase 6 of 7 done, Phase 7 prepared but not deployed.** Everything measured above ran locally against the sandbox. The production deploy (a 1.75 GiB compose stack, an LLM-free 15-minute health poller, a host actions runner with an exact-command sudoers file, and the `nginx_site_proxy` runbook for Kervan) is ready in [compose.prod.yaml](compose.prod.yaml), [host/actions-runner](host/actions-runner/README.md) and [docs/DEPLOY.md](docs/DEPLOY.md); the pre-deploy review is [docs/REVIEW-phase7.md](docs/REVIEW-phase7.md). Nothing has been run on the server yet, so the first real incident is still ahead.
