@@ -26,6 +26,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 const name = `ipsb${randomBytes(5).toString("hex")}`;
 const secret = randomBytes(32).toString("hex");
+const executionSecret = randomBytes(32).toString("hex");
+const callbackSecret = randomBytes(32).toString("hex");
 const base = loadOrchestratorConfig({ ...process.env, ACTIONS_ENABLED: "false" });
 const database = new URL(base.databaseUrl);
 if (
@@ -85,7 +87,8 @@ const config = loadOrchestratorConfig({
   DEBATE_URL: debateUrl,
   DEBATE_SHARED_SECRET: secret,
   ACTIONS_ENABLED: "true",
-  APPROVAL_HMAC_SECRET: secret,
+  APPROVAL_HMAC_SECRET: executionSecret,
+  CALLBACK_HMAC_SECRET: callbackSecret,
   PROJECT_DOMAINS_JSON: JSON.stringify({ gotrip: ["a.localhost:18443"], kervan: [] }),
   PROJECT_CONTAINERS_JSON: JSON.stringify({ gotrip: ["ipsb-a-"] }),
   PROJECT_ACTION_SCOPES_JSON: JSON.stringify({ gotrip: { containers: ["ipsb-a-app"] } }),
@@ -93,7 +96,9 @@ const config = loadOrchestratorConfig({
   CODETRAIL_API_KEY: undefined,
   GITHUB_READONLY_TOKEN: undefined,
 });
-const redact = createRedactor({ secrets: [...collectSecrets(process.env), secret] });
+const redact = createRedactor({
+  secrets: [...collectSecrets(process.env), secret, executionSecret, callbackSecret],
+});
 const actions: ActionRunner = async ({ program, args }) => {
   const docker = async (...target: string[]) =>
     (await exec("docker", target, { timeout: 30_000, maxBuffer: 64 * 1024, shell: false })).stdout;

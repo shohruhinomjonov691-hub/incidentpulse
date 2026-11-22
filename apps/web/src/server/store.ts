@@ -1,4 +1,7 @@
-import { createApprovalCallbacks, createApprovalStore } from "@incidentpulse/mcp-actions/approvals";
+import {
+  createApprovalCallbacks,
+  createApprovalDecisions,
+} from "@incidentpulse/mcp-actions/approvals";
 import { createRedisWeeklyBudget, reserveWeekly } from "@incidentpulse/orchestrator/budget";
 import { createJournal } from "@incidentpulse/orchestrator/journal";
 import { collectSecrets, createRedactor } from "@incidentpulse/redact";
@@ -37,14 +40,19 @@ function pool() {
 }
 
 export const journal = () => createJournal(pool());
+/**
+ * What the web may do with approvals: read a row and record the human decision. It holds only
+ * CALLBACK_HMAC_SECRET (button signatures). APPROVAL_HMAC_SECRET, which signs execution tokens, is never
+ * given to this process, and its database role can update the decision columns and nothing else.
+ */
 export function approvals() {
-  const secret = process.env.APPROVAL_HMAC_SECRET;
+  const secret = process.env.CALLBACK_HMAC_SECRET;
   return secret && secret.length >= 32
-    ? { store: createApprovalStore(pool(), secret), callbacks: createApprovalCallbacks(secret) }
+    ? { store: createApprovalDecisions(pool()), callbacks: createApprovalCallbacks(secret) }
     : undefined;
 }
 
 export const reserve = (at: Date, usd: number) => reserveWeekly(redis(), at, usd, limit, budgetKey);
 export const release = (at: Date, usd: number) =>
   createRedisWeeklyBudget(redis(), { keyPrefix: budgetKey }).releaseUsd(usd, at);
-export const loginKey = `${prefix ?? "incidentpulse"}:web:login`;
+export const loginPrefix = prefix ?? "incidentpulse";

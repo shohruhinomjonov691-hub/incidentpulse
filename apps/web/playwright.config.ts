@@ -6,6 +6,7 @@ export const ORIGIN = `http://127.0.0.1:${PORT}`;
 export const SCHEMA = "ipweb_smoke";
 export const PASSWORD = "smoke-password-0123456789";
 export const PREFIX = "ipweb-smoke";
+export const CALLBACK_SECRET = "smoke-callback-key-for-tests-only";
 
 const database = process.env.IT_DATABASE_URL ? new URL(process.env.IT_DATABASE_URL) : undefined;
 database?.searchParams.set("options", `-csearch_path=${SCHEMA}`);
@@ -34,6 +35,7 @@ export default defineConfig({
           WEB_ADMIN_PASSWORD: PASSWORD,
           WEB_ORIGIN: ORIGIN,
           WEB_RUNTIME_PREFIX: PREFIX,
+          CALLBACK_HMAC_SECRET: CALLBACK_SECRET,
         },
       }
     : undefined,

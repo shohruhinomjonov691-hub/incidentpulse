@@ -1,3 +1,5 @@
+import { createApprovalStore } from "@incidentpulse/mcp-actions/approvals";
+import { localPlan } from "@incidentpulse/mcp-actions/plan";
 import { createJournal } from "@incidentpulse/orchestrator/journal";
 import { Redis } from "ioredis";
 import { Pool } from "pg";
@@ -18,6 +20,29 @@ export default async function globalSetup() {
   const pool = new Pool({ connectionString: scoped.href });
   const journal = createJournal(pool);
   await journal.setup();
+  const approvals = createApprovalStore(pool, "smoke-execution-key-for-tests-only");
+  await approvals.setup();
+  const book = {
+    runbookId: "nginx_site_proxy" as const,
+    params: { domain: "kervan.uz", upstream: "127.0.0.1:3000" },
+    run: [],
+    dryRun: [],
+  };
+  const plan = localPlan("kervan", book);
+  const approval = await approvals.prepare({
+    incidentId: INCIDENT,
+    project: "kervan",
+    check: "https",
+    attempt: 0,
+    runbookId: book.runbookId,
+    params: book.params,
+    risk: "medium",
+    details: "",
+    dryRunOutput: "Static checks passed",
+    planDigest: plan.planDigest,
+    policyDigest: plan.policyDigest,
+    planSummary: plan.summary,
+  });
   const at = (seconds: number) => new Date(Date.UTC(2026, 10, 21, 9, 0, seconds)).toISOString();
   await journal.append({
     id: INCIDENT,
@@ -28,7 +53,8 @@ export default async function globalSetup() {
       { type: "node_end", at: at(3), data: { node: "intake" } },
     ],
     snapshot: {
-      status: "investigating",
+      status: "awaiting_approval",
+      approvalId: approval.id,
       state: {
         incidentId: INCIDENT,
         project: "kervan",
@@ -52,6 +78,7 @@ export default async function globalSetup() {
   });
   await pool.end();
   const redis = new Redis(redisUrl);
-  await redis.del(`${PREFIX}:web:login`);
+  const stale = await redis.keys(`${PREFIX}:web:login*`);
+  if (stale.length) await redis.del(...stale);
   redis.disconnect();
 }

@@ -273,4 +273,20 @@ describe("production settings", () => {
     });
     expect(c.actionScopes.kervan).toMatchObject({ www: true, domains: ["kervan.uz"] });
   });
+
+  test("actions require separate callback and execution keys", () => {
+    const env = {
+      ...base,
+      ACTIONS_ENABLED: "true",
+      ACTION_EXEC_USER: "incidentpulse-actions",
+      TELEGRAM_ALLOWED_USER_IDS: "42",
+      APPROVAL_HMAC_SECRET: "a".repeat(64),
+    };
+    expect(() => loadOrchestratorConfig(env)).toThrow(/CALLBACK_HMAC_SECRET/);
+    expect(() =>
+      loadOrchestratorConfig({ ...env, CALLBACK_HMAC_SECRET: env.APPROVAL_HMAC_SECRET }),
+    ).toThrow(/must differ/);
+    const c = loadOrchestratorConfig({ ...env, CALLBACK_HMAC_SECRET: "b".repeat(64) });
+    expect(c.callbackSecret).not.toBe(c.approvalSecret);
+  });
 });

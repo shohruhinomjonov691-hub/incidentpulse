@@ -81,13 +81,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     } finally {
       await store.chargeQuestion(id, micro);
       if (micro <= 3000) await release(at, CAP - micro / 1_000_000);
-      await store.append({
-        id,
-        project: incident.project,
-        events: [
-          { type: "chat_cost", at: new Date().toISOString(), data: { costUsd: micro / 1_000_000 } },
-        ],
-      });
     }
   });
   return result.toTextStreamResponse({

@@ -6,6 +6,13 @@ export {
   parseAllowedContainers,
   parseAllowedHosts,
 } from "./allowlist.ts";
+export { createDockerAdapterRunner } from "./docker-adapter/client.ts";
+export {
+  createDockerReadAdapter,
+  demuxLogs,
+  tcpUpstream,
+  type Upstream,
+} from "./docker-adapter/server.ts";
 export * from "./schemas.ts";
 export { createInfraServer, type InfraServerOptions } from "./server.ts";
 export { dnsLookup } from "./tools/dns.ts";

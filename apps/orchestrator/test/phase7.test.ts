@@ -299,7 +299,8 @@ describe("remediation proposer with a host inventory", () => {
         registryNoWww,
       );
       expect(result.book?.runbookId).toBe("certbot_nginx_issue");
-      expect(result.book?.dryRun[0]?.args).toEqual([
+      expect(result.book?.dryRun).toEqual([{ program: "nginx", args: ["-t"] }]);
+      expect(result.book?.run[0]?.args).toEqual([
         "certonly",
         "--dry-run",
         "--non-interactive",
@@ -307,7 +308,7 @@ describe("remediation proposer with a host inventory", () => {
         "-d",
         "kervan.uz",
       ]);
-      expect(result.book?.run[0]?.args).toEqual([
+      expect(result.book?.run[1]?.args).toEqual([
         "--nginx",
         "-d",
         "kervan.uz",
@@ -376,6 +377,10 @@ describe("host inventory", () => {
       })[op]) as never,
     dryRun: async () => ({ ok: true, output: "" }),
     execute: async () => ({ ok: true, output: "" }),
+    plan: async () => ({ planDigest: "a".repeat(64), policyDigest: "b".repeat(64), summary: [] }),
+    pause: async () => ({ paused: true, running: [], queued: [] }),
+    resume: async () => ({ paused: false, running: [], queued: [] }),
+    status: async () => ({ paused: false, running: [], queued: [] }),
     health: async () => true,
     ...over,
   });

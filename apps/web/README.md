@@ -8,7 +8,7 @@ Next.js 16 + Vercel AI SDK dashboard (English UI, light/dark, usable at 375 px).
 - "Ask this incident": `streamText`, evidence of that incident only, at most 10 questions per incident, charged to the weekly $0.50 budget.
 - `/evals`: tables from `sandbox/results/*.json`. `/postmortems/[id]`: rendered markdown.
 
-Env: `DATABASE_URL`, `REDIS_URL`, `WEB_ADMIN_PASSWORD`, `WEB_ORIGIN`, `APPROVAL_HMAC_SECRET`, `OPENAI_API_KEY`.
+Env: `DATABASE_URL`, `REDIS_URL`, `WEB_ADMIN_PASSWORD`, `WEB_ORIGIN`, `CALLBACK_HMAC_SECRET` (never `APPROVAL_HMAC_SECRET`: the web UI cannot sign execution tokens), `OPENAI_API_KEY`.
 
 ```bash
 pnpm --filter @incidentpulse/web test     # unit

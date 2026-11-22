@@ -18,6 +18,10 @@ function fakeClient(reads: Record<string, unknown>): RunnerClient & { reads: str
     },
     dryRun: async () => ({ ok: false, output: "unused" }),
     execute: async () => ({ ok: false, output: "unused" }),
+    plan: async () => ({ planDigest: "a".repeat(64), policyDigest: "b".repeat(64), summary: [] }),
+    pause: async () => ({ paused: true, running: [], queued: [] }),
+    resume: async () => ({ paused: false, running: [], queued: [] }),
+    status: async () => ({ paused: false, running: [], queued: [] }),
     health: async () => true,
   };
 }

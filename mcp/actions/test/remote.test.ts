@@ -29,6 +29,10 @@ function setup(
       sent.push(body);
       return { ok: true, output: "done password=hunter2hunter2" };
     },
+    plan: async () => ({ planDigest: "a".repeat(64), policyDigest: "b".repeat(64), summary: [] }),
+    pause: async () => ({ paused: true, running: [], queued: [] }),
+    resume: async () => ({ paused: false, running: [], queued: [] }),
+    status: async () => ({ paused: false, running: [], queued: [] }),
     health: async () => true,
     ...options.client,
   };
@@ -65,6 +69,7 @@ const request = {
   runbookId: "nginx_site_proxy",
   params: { domain: "kervan.uz", upstream: "127.0.0.1:3000" },
   approvalToken: "t".repeat(43),
+  planDigest: "a".repeat(64),
   tokenExpiresAt: 1_800_000_000_000,
 };
 
@@ -77,6 +82,7 @@ describe("execute_runbook through the host runner", () => {
       project: "kervan",
       runbookId: "nginx_site_proxy",
       approvalId: "AAAAAAAAAAAAAAAA",
+      planDigest: request.planDigest,
       tokenExpiresAt: 1_800_000_000_000,
     });
     expect(completed()).toEqual(result);
@@ -119,6 +125,10 @@ describe("remote dry-run", () => {
         return { ok: true, output: "ok" };
       },
       execute: async () => ({ ok: false, output: "" }),
+      plan: async () => ({ planDigest: "a".repeat(64), policyDigest: "b".repeat(64), summary: [] }),
+      pause: async () => ({ paused: true, running: [], queued: [] }),
+      resume: async () => ({ paused: false, running: [], queued: [] }),
+      status: async () => ({ paused: false, running: [], queued: [] }),
       health: async () => true,
     });
     const book = registry.resolve(

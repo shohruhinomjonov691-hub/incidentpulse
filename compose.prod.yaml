@@ -1,4 +1,4 @@
-# IncidentPulse production stack (Phase 7). Memory budget for the whole stack: 1752 MiB (<= 2 GiB).
+# IncidentPulse production stack (Phase 7). Memory budget for the runtime stack: 1832 MiB (<= 2 GiB).
 #
 #   docker compose --env-file /opt/incidentpulse/secrets/.env -f compose.prod.yaml up -d
 #
@@ -9,9 +9,16 @@
 #   - Every service has mem_limit (swap off: memswap_limit == mem_limit), a CPU cap and a pid cap.
 #   - Each service receives ONLY the variables it needs (no shared env_file), so the web UI and the Python
 #     services never see the Telegram token, and so on.
-#   - Docker is reachable read-only through docker-proxy (container GET + logs; POST is off).
+#   - Docker data reaches the orchestrator ONLY through docker-read-adapter: GET /containers/json (project
+#     prefixes, no Labels/Mounts) and logs of allowlisted containers. Inspect, archive, export, stats, exec and
+#     everything else answer 403. The adapter alone talks to docker-socket-proxy, on a separate internal network
+#     the orchestrator is not part of.
 #     Host data (pm2, nginx -T, certbot) and all state-changing runbooks go through the host actions runner
 #     (systemd service `incidentpulse-actions`, unix socket mounted from /run/incidentpulse).
+#   - Keys and database roles are split: APPROVAL_HMAC_SECRET (execution tokens) lives in the orchestrator and the
+#     runner only; the web gets CALLBACK_HMAC_SECRET (button signatures) and a Postgres role that can read and
+#     record the human decision, nothing else. Tables are created by the one-shot `migrate` service (profile
+#     `migrate`, bootstrap role), never by the runtime roles.
 #
 # There is no separate `telegram-bot` container on purpose. The bot (grammY long polling) runs inside the
 # orchestrator: approval buttons need the approvals store and the graph resume path, and a second process
@@ -96,9 +103,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Read-only Docker API for mcp-infra (docker ps, docker logs). Only container GETs; POST is refused.
-  # Note: the proxy limits verbs, not data. A container GET can include the container's environment, so the
-  # orchestrator (the only client, on an internal network) must stay trusted.
+  # Docker API behind the adapter. Only container GETs; POST is refused. The proxy limits verbs, not data (a
+  # container GET can include the container's environment), so its ONLY client is docker-read-adapter, on the
+  # internal `dockerproxy` network that no other service joins.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     restart: unless-stopped
@@ -106,7 +113,7 @@ services:
     memswap_limit: 24m
     cpus: 0.25
     pids_limit: 64
-    networks: [dockerapi]
+    networks: [dockerproxy]
     logging: *logging
     environment:
       CONTAINERS: "1"
@@ -139,6 +146,33 @@ services:
       interval: 15s
       timeout: 3s
       retries: 5
+
+  # The orchestrator's only view of Docker. Serves GET /containers/json (names filtered by the project
+  # prefixes, without Labels/Mounts/Env) and logs of allowlisted containers; everything else is 403.
+  # Networks: `dockerread` (orchestrator <-> adapter) and `dockerproxy` (adapter <-> docker-proxy).
+  docker-read-adapter:
+    <<: *node-app
+    pull_policy: never
+    mem_limit: 80m
+    memswap_limit: 80m
+    cpus: 0.25
+    pids_limit: 64
+    command: ["node", "mcp/infra/src/docker-adapter/main.ts"]
+    environment:
+      NODE_OPTIONS: --max-old-space-size=32
+      ADAPTER_HOST: 0.0.0.0
+      ADAPTER_PORT: "2376"
+      DOCKER_PROXY_URL: http://docker-proxy:2375
+      PROJECT_CONTAINERS_JSON: ${PROJECT_CONTAINERS_JSON:?set PROJECT_CONTAINERS_JSON}
+    depends_on:
+      docker-proxy: { condition: service_started }
+    networks: [dockerread, dockerproxy]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2376/health | grep -q ok"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   intake:
     <<: *node-app
@@ -180,7 +214,9 @@ services:
     environment:
       NODE_OPTIONS: --max-old-space-size=320
       HEARTBEAT_FILE: /tmp/heartbeat
-      DATABASE_URL: postgres://incidentpulse:${POSTGRES_PASSWORD}@postgres:5432/incidentpulse
+      # Runtime role: DML only, no DDL (tables come from the `migrate` service).
+      DATABASE_URL: postgres://incidentpulse_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@postgres:5432/incidentpulse
+      DB_AUTO_MIGRATE: "false"
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
@@ -196,11 +232,13 @@ services:
       POSTMORTEM_URL: http://postmortem-crew:8791
       POSTMORTEM_SHARED_SECRET: ${POSTMORTEM_SHARED_SECRET:?set POSTMORTEM_SHARED_SECRET}
       WEB_ORIGIN: https://incidentpulse.gotrips.cloud
-      # Human-approved actions go to the host runner. APPROVAL_HMAC_SECRET also signs Telegram buttons.
+      # Human-approved actions go to the host runner. APPROVAL_HMAC_SECRET signs execution tokens and the plan
+      # MAC (orchestrator + runner only); CALLBACK_HMAC_SECRET signs the Approve/Reject buttons (Telegram + web).
       ACTIONS_ENABLED: "true"
       APPROVAL_HMAC_SECRET: ${APPROVAL_HMAC_SECRET:?set APPROVAL_HMAC_SECRET}
+      CALLBACK_HMAC_SECRET: ${CALLBACK_HMAC_SECRET:?set CALLBACK_HMAC_SECRET}
       HOST_RUNNER_SOCKET: /run/incidentpulse/actions.sock
-      DOCKER_HOST: tcp://docker-proxy:2375
+      DOCKER_READ_ADAPTER_URL: http://docker-read-adapter:2376
       # Allowlists (JSON, see .env.production.example and docs/DEPLOY.md section 5)
       PROJECT_DOMAINS_JSON: ${PROJECT_DOMAINS_JSON:?set PROJECT_DOMAINS_JSON}
       PROJECT_CONTAINERS_JSON: ${PROJECT_CONTAINERS_JSON:?set PROJECT_CONTAINERS_JSON}
@@ -219,9 +257,9 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      # service_started, not healthy: a proxy that is slow or unhealthy must not stop incident handling.
-      docker-proxy: { condition: service_started }
-    networks: [backend, dockerapi]
+      # service_started, not healthy: an adapter that is slow or unhealthy must not stop incident handling.
+      docker-read-adapter: { condition: service_started }
+    networks: [backend, dockerread]
     healthcheck:
       test: ["CMD-SHELL", 'test -n "$$(find /tmp/heartbeat -mmin -2 2>/dev/null)"']
       interval: 30s
@@ -243,11 +281,14 @@ services:
       - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     environment:
       NODE_OPTIONS: --max-old-space-size=192
-      DATABASE_URL: postgres://incidentpulse:${POSTGRES_PASSWORD}@postgres:5432/incidentpulse
+      # Web role: SELECT + the approval decision columns. Chat uses two scoped SQL functions.
+      DATABASE_URL: postgres://incidentpulse_web:${WEB_DB_PASSWORD:?set WEB_DB_PASSWORD}@postgres:5432/incidentpulse
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       WEB_ORIGIN: https://incidentpulse.gotrips.cloud
       WEB_ADMIN_PASSWORD: ${WEB_ADMIN_PASSWORD:?set WEB_ADMIN_PASSWORD (openssl rand -hex 24)}
-      APPROVAL_HMAC_SECRET: ${APPROVAL_HMAC_SECRET:?set APPROVAL_HMAC_SECRET}
+      WEB_PROXY_SECRET: ${WEB_PROXY_SECRET:?set WEB_PROXY_SECRET (openssl rand -hex 32)}
+      # Button signatures only. The web never receives APPROVAL_HMAC_SECRET (execution tokens).
+      CALLBACK_HMAC_SECRET: ${CALLBACK_HMAC_SECRET:?set CALLBACK_HMAC_SECRET}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       WEEKLY_BUDGET_USD: ${WEEKLY_BUDGET_USD:-0.50}
     depends_on:
@@ -259,6 +300,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # One-shot database migration (profile `migrate`, so `up -d` never starts it and the one-service-per-budget
+  # checks do not count it): creates tables/triggers and the incidentpulse_app / incidentpulse_web roles with
+  # the bootstrap role. Run it before `up -d` and after every update (docs/DEPLOY.md):
+  #   $COMPOSE --profile migrate run --rm migrate
+  migrate:
+    <<: *node-app
+    pull_policy: never
+    profiles: ["migrate"]
+    restart: "no"
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.5
+    command: ["node", "apps/orchestrator/src/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://incidentpulse:${POSTGRES_PASSWORD}@postgres:5432/incidentpulse
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+      WEB_DB_PASSWORD: ${WEB_DB_PASSWORD:?set WEB_DB_PASSWORD}
+    depends_on:
+      postgres: { condition: service_healthy }
 
   debate-verifier:
     <<: *python-app
@@ -337,8 +398,11 @@ services:
 
 networks:
   backend: {}
-  # No route to the outside: only the orchestrator and the proxy are on it.
-  dockerapi:
+  # No route to the outside. dockerread: orchestrator <-> docker-read-adapter. dockerproxy: adapter <-> docker-proxy.
+  # The orchestrator is on the first only, so it has no network path to docker-proxy.
+  dockerread:
+    internal: true
+  dockerproxy:
     internal: true
 
 volumes:

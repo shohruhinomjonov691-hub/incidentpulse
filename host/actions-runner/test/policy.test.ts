@@ -22,7 +22,18 @@ describe("policy", () => {
     [{ projects: {}, bins: { rm: "/bin/rm" } }],
     [{ projects: {}, upstreamPortMin: 80 }],
     [{ projects: [] }],
+    [{ projects: {}, publicIps: ["not-an-ip"] }],
+    [{ projects: {}, publicIps: ["2001:db8::1"] }],
+    [{ projects: {}, publicIps: "203.0.113.10" }],
   ])("rejects an invalid policy %#", (input) => {
     expect(() => parsePolicy(input)).toThrow(PolicyError);
+  });
+
+  test("publicIps is optional, deduplicated and sorted", () => {
+    expect(parsePolicy({ projects: {} }).publicIps).toBeUndefined();
+    expect(
+      parsePolicy({ projects: {}, publicIps: ["203.0.113.10", "198.51.100.7", "203.0.113.10"] })
+        .publicIps,
+    ).toEqual(["198.51.100.7", "203.0.113.10"]);
   });
 });

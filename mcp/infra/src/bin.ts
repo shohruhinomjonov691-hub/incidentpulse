@@ -4,6 +4,7 @@ import { collectSecrets, createRedactor } from "@incidentpulse/redact";
 import { createRunnerClient } from "@incidentpulse/runner-client";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { parseAllowedContainers, parseAllowedHosts } from "./allowlist.ts";
+import { createDockerAdapterRunner } from "./docker-adapter/client.ts";
 import { createInfraServer } from "./server.ts";
 
 const allowedHosts = parseAllowedHosts(process.env.INFRA_ALLOWED_HOSTS);
@@ -22,12 +23,15 @@ const pm2Container = process.env.INFRA_PM2_CONTAINER?.trim() || undefined;
 const timeoutMs = Number(process.env.INFRA_TIMEOUT_MS ?? 8000);
 // Read-only host data (pm2, nginx -T, certbot certificates) comes from the host actions runner.
 const runnerSocket = process.env.INFRA_HOST_RUNNER_SOCKET?.trim();
+// Docker data comes from the docker-read-adapter (list + allowlisted logs only), never from the Docker API itself.
+const dockerAdapter = process.env.INFRA_DOCKER_ADAPTER_URL?.trim();
 
 const server = createInfraServer({
   allowedHosts,
   allowedContainers,
   timeoutMs,
   ...(runnerSocket ? { hostRunner: createRunnerClient({ socketPath: runnerSocket }) } : {}),
+  ...(dockerAdapter ? { dockerRunner: createDockerAdapterRunner(dockerAdapter) } : {}),
   ...(pm2Apps.length
     ? { pm2: { apps: pm2Apps, ...(pm2Container ? { container: pm2Container } : {}) } }
     : {}),
@@ -35,5 +39,5 @@ const server = createInfraServer({
 });
 await server.connect(new StdioServerTransport());
 console.error(
-  `mcp-infra ready (hosts: ${allowedHosts.join(", ") || "-"}; containers: ${allowedContainers.join(", ") || "-"}; pm2: ${pm2Apps.join(", ") || "-"}; host runner: ${runnerSocket ? "yes" : "no"})`,
+  `mcp-infra ready (hosts: ${allowedHosts.join(", ") || "-"}; containers: ${allowedContainers.join(", ") || "-"}; pm2: ${pm2Apps.join(", ") || "-"}; host runner: ${runnerSocket ? "yes" : "no"}; docker: ${dockerAdapter ? "adapter" : "cli"})`,
 );

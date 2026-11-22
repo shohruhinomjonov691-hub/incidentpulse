@@ -95,7 +95,7 @@ describe("the same without www (Kervan's first rollout)", () => {
     expect(runner.run.map((s) => [s.bin, ...s.args])).toEqual(
       yaml.run.map((s) => [s.program, ...s.args]),
     );
-    expect(yaml.run[0]?.args).toEqual([
+    expect(yaml.run[1]?.args).toEqual([
       "--nginx",
       "-d",
       "kervan.uz",

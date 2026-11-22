@@ -4,6 +4,9 @@
     "test": {
       "env": ["IT_DATABASE_URL", "IT_REDIS_URL"]
     },
+    "@incidentpulse/actions-runner#test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/DEPLOY.md"]
+    },
     "typecheck": {},
     "generate": {
       "outputs": ["json/**"]

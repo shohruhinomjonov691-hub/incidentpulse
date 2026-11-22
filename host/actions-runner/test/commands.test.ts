@@ -10,7 +10,10 @@ describe("runbook resolution", () => {
   test("certbot_nginx_issue covers www, and is medium risk", () => {
     const book = resolve("kervan", "certbot_nginx_issue", { domain: "kervan.uz" });
     expect(book.risk).toBe("medium");
-    expect(book.dryRun[0]?.args).toEqual([
+    // Before approval: only `nginx -t`. Nothing certbot runs without a human decision.
+    expect(book.dryRun.map((s) => [s.bin, ...s.args])).toEqual([["nginx", "-t"]]);
+    // After approval: the staging run is the FIRST step, then the real issuance, then nginx -t.
+    expect(book.run[0]?.args).toEqual([
       "certonly",
       "--dry-run",
       "--non-interactive",
@@ -20,7 +23,7 @@ describe("runbook resolution", () => {
       "-d",
       "www.kervan.uz",
     ]);
-    expect(book.run[0]?.args).toEqual([
+    expect(book.run[1]?.args).toEqual([
       "--nginx",
       "-d",
       "kervan.uz",
@@ -29,14 +32,27 @@ describe("runbook resolution", () => {
       "--non-interactive",
       "--redirect",
     ]);
+    expect(book.run[2]).toMatchObject({ bin: "nginx", args: ["-t"] });
+  });
+
+  test("no certbot command is ever part of a pre-approval dry run (H3)", () => {
+    for (const [id, params] of [
+      ["certbot_nginx_issue", { domain: "kervan.uz" }],
+      ["certbot_renew", { domain: "kervan.uz" }],
+    ] as const) {
+      const book = resolve("kervan", id, params);
+      expect(book.dryRun.some((s) => s.bin === "certbot")).toBe(false);
+      expect(book.run[0]).toMatchObject({ bin: "certbot" });
+      expect(book.run[0]?.args).toContain("--dry-run");
+    }
   });
 
   test("without www (Kervan's first rollout) certbot_nginx_issue uses -d kervan.uz and nothing else", () => {
     const book = resolveRunbook(policyNoWww, "kervan", "certbot_nginx_issue", {
       domain: "kervan.uz",
     });
-    // Dry run and real run use the same authenticator; no www name anywhere.
-    expect(book.dryRun[0]?.args).toEqual([
+    // Staging run and real run use the same authenticator; no www name anywhere.
+    expect(book.run[0]?.args).toEqual([
       "certonly",
       "--dry-run",
       "--non-interactive",
@@ -44,7 +60,7 @@ describe("runbook resolution", () => {
       "-d",
       "kervan.uz",
     ]);
-    expect(book.run[0]?.args).toEqual([
+    expect(book.run[1]?.args).toEqual([
       "--nginx",
       "-d",
       "kervan.uz",

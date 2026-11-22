@@ -92,3 +92,31 @@ test("scrub masks passwords and private keys", () => {
   expect(scrub("password=hunter2hunter2 ok")).toContain("[REDACTED]");
   expect(scrub("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----")).toBe("[REDACTED]");
 });
+
+describe("redaction happens before truncation (M9)", () => {
+  const KEY = [
+    "-----BEGIN PRIVATE KEY-----",
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj",
+    "MBEFA1UEAwwObG9jYWxob3N0LWNlcnQwHhcNMjQwMTAxMDAwMDAwWhcNMzQwMTAx",
+    "-----END PRIVATE KEY-----",
+  ].join("\n");
+
+  test("a multi-line private key in pm2 logs is removed whole, not line by line", () => {
+    const lines = parsePm2Logs(`start\n${KEY}\nend\n`, 50);
+    const text = lines.join("\n");
+    expect(text).not.toContain("MIIEvQIBADAN");
+    expect(text).not.toContain("MBEFA1UEAwwO");
+    expect(text).toContain("[REDACTED]");
+    expect(lines[0]).toBe("start");
+    expect(lines.at(-1)).toBe("end");
+  });
+
+  test("a secret that would straddle the old cut leaves no fragment behind", () => {
+    // Cutting first (400 chars) keeps only "Bearer abcdefgh..." (fragment survives when < 8 chars); redacting first removes it.
+    const line = `${"x".repeat(370)} Bearer abcdefghijklmnopqrstuvwxyz0123456789 tail`;
+    const [out] = parsePm2Logs(line, 5);
+    expect(out).not.toContain("Bearer abc");
+    expect(out).not.toContain("abcdefgh");
+    expect(out).toContain("Bearer [REDACTED]");
+  });
+});

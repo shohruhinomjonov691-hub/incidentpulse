@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node
 import { dirname } from "node:path";
 import { execFileExec } from "./exec.ts";
 import { parsePolicy } from "./policy.ts";
-import { createHttpServer, createRunner, probeLocalPort } from "./server.ts";
+import { createHttpServer, createRunner, filePause, probeLocalPort } from "./server.ts";
 import { createFileLedger } from "./token.ts";
 
 const policyPath = process.env.ACTIONS_RUNNER_POLICY ?? "/etc/incidentpulse/actions-policy.json";
@@ -32,6 +32,7 @@ const runner = createRunner({
   exec: execFileExec,
   secret,
   ledger: createFileLedger(`${stateDir}/consumed.jsonl`),
+  pause: filePause(`${stateDir}/paused`),
   now: () => Date.now(),
   probeLocal: probeLocalPort,
   log,

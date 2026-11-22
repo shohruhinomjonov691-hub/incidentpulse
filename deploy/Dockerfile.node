@@ -7,8 +7,7 @@ ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true \
     NEXT_TELEMETRY_DISABLED=1
-# docker-cli: mcp-infra runs `docker ps` / `docker logs` against DOCKER_HOST (the read-only socket proxy).
-RUN apk add --no-cache docker-cli tini && corepack enable
+RUN apk add --no-cache tini && corepack enable
 WORKDIR /app
 
 FROM base AS build

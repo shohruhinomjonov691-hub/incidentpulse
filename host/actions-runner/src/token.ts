@@ -11,13 +11,15 @@ export interface TokenClaims {
   project: string;
   runbookId: string;
   params: Record<string, string>;
+  /** sha256 of the canonical plan the human approved (src/plan.ts); part of the signed payload. */
+  planDigest: string;
   /** Epoch milliseconds; part of the signed payload. */
   tokenExpiresAt: number;
 }
 
 /**
  * Must stay byte-identical to `tokenFor` in mcp/actions/src/approvals.ts (a contract test in
- * test/token.test.ts compares them). The key is APPROVAL_HMAC_SECRET.
+ * test/token.test.ts compares them). The key is APPROVAL_HMAC_SECRET (never given to the web UI).
  */
 export function signApproval(secret: string, c: TokenClaims): string {
   const payload = [
@@ -27,6 +29,7 @@ export function signApproval(secret: string, c: TokenClaims): string {
     c.project,
     c.runbookId,
     Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b)),
+    c.planDigest,
     c.tokenExpiresAt,
   ];
   return createHmac("sha256", secret).update(JSON.stringify(payload)).digest("base64url");
@@ -54,7 +57,9 @@ export function checkApprovalToken(
 export interface Ledger {
   /** Records the approval as consumed BEFORE anything runs. False when it was seen before. */
   claim(approvalId: string, at: number): boolean;
-  complete(approvalId: string, ok: boolean, at: number): void;
+  complete(approvalId: string, ok: boolean, at: number, failedStep?: number): void;
+  /** Audit trail for a verified approval that was refused before it ran (expired in the queue, paused, ...). */
+  refuse(approvalId: string, reason: string, at: number): void;
 }
 
 /**
@@ -90,8 +95,17 @@ export function createFileLedger(path: string): Ledger {
       seen.add(approvalId);
       return true;
     },
-    complete(approvalId, ok, at) {
-      write({ event: "completed", approvalId, ok, at });
+    complete(approvalId, ok, at, failedStep) {
+      write({
+        event: "completed",
+        approvalId,
+        ok,
+        at,
+        ...(failedStep === undefined ? {} : { failedStep }),
+      });
+    },
+    refuse(approvalId, reason, at) {
+      write({ event: "refused", approvalId, reason, at });
     },
   };
 }

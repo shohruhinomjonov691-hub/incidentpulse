@@ -111,11 +111,14 @@ export async function dockerLogs(
       timeoutMs: options.timeoutMs,
     });
     // `docker logs` replays stdout then stderr; both matter (nginx and Node log errors to stderr).
-    const all = `${stdout}${stderr}`.split("\n").filter((l) => l.length > 0);
+    // Redaction runs on the WHOLE text first: a long secret or a multi-line private key must match its full
+    // pattern, and cutting a line afterwards can then never leave a fragment of one behind.
+    const clean = options.redact(`${stdout}${stderr}`);
+    const all = clean.split("\n").filter((l) => l.length > 0);
     let truncated = all.length > tail;
     let lines = all
       .slice(-tail)
-      .map((l) => options.redact(l.length > MAX_LINE_CHARS ? `${l.slice(0, MAX_LINE_CHARS)}…` : l));
+      .map((l) => (l.length > MAX_LINE_CHARS ? `${l.slice(0, MAX_LINE_CHARS)}…` : l));
     let total = 0;
     const kept: string[] = [];
     for (const line of [...lines].reverse()) {

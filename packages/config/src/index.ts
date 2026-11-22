@@ -43,7 +43,13 @@ const EnvSchema = z.object({
   DEBATE_SHARED_SECRET: z.string().min(32).optional(),
   ACTION_EXEC_USER: z.string().min(1).optional(),
   ACTIONS_ENABLED: z.enum(["true", "false"]).default("false"),
+  /**
+   * Signs the execution token and the plan MAC. Held by the orchestrator and the host runner ONLY: the web UI
+   * never receives it, so a compromised web process cannot mint execution tokens.
+   */
   APPROVAL_HMAC_SECRET: z.string().min(32).optional(),
+  /** Signs the Approve/Reject buttons (Telegram and web). Must differ from APPROVAL_HMAC_SECRET. */
+  CALLBACK_HMAC_SECRET: z.string().min(32).optional(),
   PROJECT_ACTION_SCOPES_JSON: z.string().optional(),
   /** Unix socket of the host actions runner (production). Replaces ACTION_EXEC_USER/sudo from a container. */
   HOST_RUNNER_SOCKET: z
@@ -55,6 +61,16 @@ const EnvSchema = z.object({
     .string()
     .regex(/^(tcp|unix):\/\/\S+$/, "must be tcp://... or unix://...")
     .optional(),
+  /**
+   * The docker-read-adapter (containers list + allowlisted logs only), e.g. http://docker-read-adapter:2376.
+   * Preferred over DOCKER_HOST: the orchestrator never gets a path to the Docker socket proxy itself.
+   */
+  DOCKER_READ_ADAPTER_URL: z
+    .string()
+    .regex(/^http:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/, "must be http://host[:port]")
+    .optional(),
+  /** "false" in production: tables come from the one-shot migrate service, the runtime role has no DDL rights. */
+  DB_AUTO_MIGRATE: z.enum(["true", "false"]).default("true"),
   /** Project id -> pm2 apps on the host, e.g. {"kervan":["KERVAN","KERVAN-REACT"]}. */
   PROJECT_PM2_JSON: z.string().optional(),
   /** LLM-free health poller (every 15 minutes). Off by default. */
@@ -353,9 +369,12 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "ACTIONS_ENABLED",
     "ACTION_EXEC_USER",
     "APPROVAL_HMAC_SECRET",
+    "CALLBACK_HMAC_SECRET",
     "PROJECT_ACTION_SCOPES_JSON",
     "HOST_RUNNER_SOCKET",
     "DOCKER_HOST",
+    "DOCKER_READ_ADAPTER_URL",
+    "DB_AUTO_MIGRATE",
     "PROJECT_PM2_JSON",
     "HEALTH_POLL_ENABLED",
     "HEALTH_POLL_URLS_JSON",
@@ -379,10 +398,16 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
   }
   if (c.MODEL_PRICE_OUTPUT_PER_M !== undefined) overrides.output = c.MODEL_PRICE_OUTPUT_PER_M;
   const actionsEnabled = c.ACTIONS_ENABLED === "true";
-  if (actionsEnabled && (!c.APPROVAL_HMAC_SECRET || !c.TELEGRAM_ALLOWED_USER_IDS.size)) {
+  if (
+    actionsEnabled &&
+    (!c.APPROVAL_HMAC_SECRET || !c.CALLBACK_HMAC_SECRET || !c.TELEGRAM_ALLOWED_USER_IDS.size)
+  ) {
     throw new ConfigError([
-      "ACTIONS_ENABLED requires APPROVAL_HMAC_SECRET and TELEGRAM_ALLOWED_USER_IDS",
+      "ACTIONS_ENABLED requires APPROVAL_HMAC_SECRET, CALLBACK_HMAC_SECRET and TELEGRAM_ALLOWED_USER_IDS",
     ]);
+  }
+  if (c.APPROVAL_HMAC_SECRET && c.APPROVAL_HMAC_SECRET === c.CALLBACK_HMAC_SECRET) {
+    throw new ConfigError(["CALLBACK_HMAC_SECRET must differ from APPROVAL_HMAC_SECRET"]);
   }
   const scope = z.strictObject({
     containers: z.array(z.string()).optional(),
@@ -410,6 +435,8 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     actionExecUser: c.ACTION_EXEC_USER,
     hostRunnerSocket: c.HOST_RUNNER_SOCKET,
     dockerHost: c.DOCKER_HOST,
+    dockerReadAdapterUrl: c.DOCKER_READ_ADAPTER_URL,
+    dbAutoMigrate: c.DB_AUTO_MIGRATE === "true",
     projectPm2: resolveProjectPm2(c.PROJECT_PM2_JSON),
     healthPoll: {
       enabled: c.HEALTH_POLL_ENABLED === "true",
@@ -426,6 +453,7 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
       },
     },
     approvalSecret: c.APPROVAL_HMAC_SECRET,
+    callbackSecret: c.CALLBACK_HMAC_SECRET,
     actionScopes: Object.fromEntries(
       Object.entries(parsedScopes?.data ?? {}).map(([project, settings]) => [
         project,

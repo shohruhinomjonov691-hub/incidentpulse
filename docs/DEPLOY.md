@@ -12,8 +12,8 @@ Internet ──► nginx (host, 80/443)
                ├─ kervan.uz  (mavjud conf.d/kervan.conf) ──► localhost:3000  (Kervan, PM2; 3000 BAND)
                └─ boshqa saytlar (conf.d/*.conf; tegmaymiz)
 
-Docker (compose.prod.yaml, jami ≤ 1752 MiB):
-  postgres · redis · docker-proxy · intake · orchestrator · web · debate-verifier · postmortem-crew
+Docker (compose.prod.yaml, jami 1832 MiB):
+  postgres · redis · docker-proxy · docker-read-adapter · intake · orchestrator · web · debate-verifier · postmortem-crew
   hech qaysi port tashqariga ochilmaydi, faqat web 127.0.0.1:${WEB_HOST_PORT:-3100}
 
 Host (systemd):
@@ -23,7 +23,7 @@ Host (systemd):
 
 | Nima | Qayerda | Kim ko'radi / bajaradi |
 |---|---|---|
-| `docker ps`, `docker logs` | `docker-proxy` (faqat `GET /containers/*`, `POST` yo'q) | orchestrator (o'qish) |
+| Konteyner ro'yxati va loglar | `docker-read-adapter` (`PROJECT_CONTAINERS_JSON` prefikslari, cheklangan tail) → `docker-proxy` | orchestrator (o'qish) |
 | `pm2 jlist/logs`, `pm2_ports`, `nginx -T`, `certbot certificates` | host runner, **o'qish rejimi** | orchestrator (o'qish) |
 | `certbot`, `nginx reload`, `pm2 restart`, `docker restart`, `nginx_site_proxy` | host runner, **faqat tasdiqlangan token bilan** | Telegram/web'da inson tasdig'idan keyin |
 | Health poller | orchestrator ichida, **LLM'siz**, har 15 daqiqada | holat o'zgarsagina tergov boshlaydi |
@@ -119,11 +119,15 @@ cd /opt/incidentpulse/app && git rev-parse --short HEAD
 umask 077
 cat > /opt/incidentpulse/secrets/.env <<EOF
 POSTGRES_PASSWORD=$(openssl rand -hex 32)
+APP_DB_PASSWORD=$(openssl rand -hex 32)
+WEB_DB_PASSWORD=$(openssl rand -hex 32)
 REDIS_PASSWORD=$(openssl rand -hex 32)
 WEBHOOK_HMAC_SECRET=$(openssl rand -hex 32)
 DEBATE_SHARED_SECRET=$(openssl rand -hex 32)
 POSTMORTEM_SHARED_SECRET=$(openssl rand -hex 32)
 APPROVAL_HMAC_SECRET=$(openssl rand -hex 32)
+CALLBACK_HMAC_SECRET=$(openssl rand -hex 32)
+WEB_PROXY_SECRET=$(openssl rand -hex 32)
 WEB_ADMIN_PASSWORD=$(openssl rand -hex 24)
 WEB_HOST_PORT=3100
 OPENAI_API_KEY=
@@ -146,6 +150,8 @@ Endi qo'lda to'ldiring (`nano /opt/incidentpulse/secrets/.env`):
 - `TELEGRAM_ALLOWED_USER_IDS`: tasdiq tugmasini bosa oladigan Telegram **user id**(lar), vergul bilan.
 - `WEB_ADMIN_PASSWORD` allaqachon 48 belgilik tasodifiy; uni parol menejeriga saqlang: `grep ^WEB_ADMIN_PASSWORD /opt/incidentpulse/secrets/.env`.
 - `WEB_HOST_PORT=3100`: web konteyneri host'da `127.0.0.1:3100` ga chiqadi (konteyner ichida har doim 3000). **3000 emas**: u Kervan'niki. Qiymat bo'sh yoki yo'q bo'lsa ham default 3100. Boshqa port tanlasangiz, 9-qadamdagi nginx vhost'ning `proxy_pass` porti bilan bir xil bo'lsin. Tekshirish: `ss -ltn | grep ':3100\b' || echo "bo'sh"`.
+
+`POSTGRES_PASSWORD` migratsiyaning `incidentpulse` roliga tegishli. `APP_DB_PASSWORD` va `WEB_DB_PASSWORD` alohida runtime rollari uchun. `CALLBACK_HMAC_SECRET` Telegram/web tugmalarini imzolaydi. `APPROVAL_HMAC_SECRET` faqat orchestrator va runner'ga beriladi. `WEB_PROXY_SECRET` nginx va web orasida forwarding header'ini tasdiqlaydi.
 
 JSON qiymatlar uchun 5-bo'limga qarang. Hamma qiymatlar to'ldirilganini tekshirish:
 
@@ -190,7 +196,7 @@ Nima nimani cheklaydi:
 | `HEALTH_DEEP_JSON` | Ixtiyoriy. Bo'sh = faqat mixed content tekshiruvi. API tekshiruvi uchun namuna: `'{"kervan":{"api":["https://kervan.uz:8443/<endpoint>"],"expect":[200,401]}}'`. `expect` yozilmasa `[200]`. API URL'ning **hostnomi loyiha domenlari ichida** bo'lishi shart (`kervan.uz:8443` mumkin, `evil.example` yoki `169.254.169.254` mumkin emas), aks holda **start bo'lmaydi** (xato loyiha nomini aytadi, URL'ni emas). |
 | `HEALTH_DEEP_INTERVAL_MIN` | Deep tekshiruv oralig'i, daqiqada (default `60`; oddiy poll 15 da qoladi). `0` = deep o'chiq. |
 
-`webroot` (`/var/www/html`) faqat `nginx_site_proxy` yaratadigan **yangi** vhost'larning `/.well-known/acme-challenge/` joyi uchun ishlatiladi (Ubuntu'da nginx default papkasi shu; tekshirish: `ls -ld /var/www/html`). Kervan sertifikati webroot'ga bog'liq emas: `certbot_nginx_issue` ham dry-run'da, ham real ishda nginx autentifikatoridan foydalanadi.
+`webroot` (`/var/www/html`) faqat `nginx_site_proxy` yaratadigan **yangi** vhost'larning `/.well-known/acme-challenge/` joyi uchun ishlatiladi (Ubuntu'da nginx default papkasi shu; tekshirish: `ls -ld /var/www/html`). Kervan sertifikati webroot'ga bog'liq emas. Tasdiqdan oldin runner vhost, DNS A, sertifikat holati va `nginx -t` ni tekshiradi. Tasdiqdan so'ng staging va real issuance nginx autentifikatoridan foydalanadi. VPS NAT ortida bo'lsa, host policy'dagi `publicIps` ro'yxatiga VPS'ning public IPv4 manzilini kiriting.
 
 Poller qoidasi: URL `5xx`, ulanish xatosi yoki TLS xatosi bersa va 10 soniyadan keyin qayta tekshiruv ham xato bersa **Down**. `4xx` (masalan 401/404) ilovaning javobi, nosozlik emas. Tergov faqat holat **o'zgarganda** boshlanadi (ok→down, down→ok yoki birinchi ko'rishda down). O'sha holatda qolgan loyiha token ham, xabar ham sarflamaydi.
 
@@ -282,12 +288,27 @@ Policy to'g'riligini va sudoers'ni generatsiya qilib ko'ring:
 ### 6.4 sudoers (faqat aniq buyruqlar)
 
 ```bash
-/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json > /tmp/incidentpulse-actions.sudoers
-visudo -cf /tmp/incidentpulse-actions.sudoers
-install -m 0440 -o root -g root /tmp/incidentpulse-actions.sudoers /etc/sudoers.d/incidentpulse-actions
-visudo -c
+(
+  set -eu
+  test "$(id -u)" -eq 0
+  umask 077
+  sudoers_dir="$(mktemp -d /tmp/incidentpulse-sudoers.XXXXXXXX)"
+  sudoers_file="$sudoers_dir/incidentpulse-actions"
+  cleanup_sudoers() {
+    if test -f "$sudoers_file"; then unlink "$sudoers_file"; fi
+    rmdir "$sudoers_dir"
+  }
+  trap cleanup_sudoers EXIT
+  chmod 0700 "$sudoers_dir"
+  /opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json > "$sudoers_file"
+  visudo -cf "$sudoers_file"
+  install -m 0440 -o root -g root "$sudoers_file" /etc/sudoers.d/incidentpulse-actions
+  visudo -c
+)
 sudo -l -U incidentpulse-actions | head -20
 ```
+
+Root yaratgan vaqtinchalik katalog `0700`, render fayli `umask 077` bilan ochiladi. `visudo -cf` tekshirgan nusxa o'rnatiladi.
 
 **Kutilgan natija**: `parsed OK` (har ikkala `visudo` da); `sudo -l` faqat ro'yxatdagi aniq buyruqlarni ko'rsatadi (`bash`, `sh`, `tee`, `rm`, `*` **yo'q**). Faqat `nginx_site_proxy` yordamchisi qatorida `[0-9]` belgi sinflari bor (4-5 xonali loopback port): yordamchi o'zi ham qayta tekshiradi.
 
@@ -304,8 +325,12 @@ sudo -u incidentpulse-actions sudo -n /usr/bin/whoami; echo "exit=$?"
 Runner faqat `APPROVAL_HMAC_SECRET` ni biladi (token tekshirish uchun); OpenAI/Telegram kalitlari unda yo'q.
 
 ```bash
-grep '^APPROVAL_HMAC_SECRET=' /opt/incidentpulse/secrets/.env > /etc/incidentpulse/actions-runner.env
-chown root:root /etc/incidentpulse/actions-runner.env && chmod 600 /etc/incidentpulse/actions-runner.env
+(
+  set -eu
+  umask 077
+  install -m 0600 -o root -g root /dev/null /etc/incidentpulse/actions-runner.env
+  grep '^APPROVAL_HMAC_SECRET=' /opt/incidentpulse/secrets/.env > /etc/incidentpulse/actions-runner.env
+)
 cp /opt/incidentpulse/app/host/actions-runner/deploy/incidentpulse-actions.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now incidentpulse-actions
@@ -343,7 +368,7 @@ Token bilan himoyani tekshirish (tokensiz tasdiqlangan amal bajarilmasligi kerak
 
 ```bash
 curl -s --unix-socket $S -H 'content-type: application/json' \
-  -d '{"project":"kervan","runbookId":"pm2_restart","params":{"app":"KERVAN"},"approvalId":"AAAAAAAAAAAAAAAA","incidentId":"test","approvalToken":"x","tokenExpiresAt":1}' \
+  -d '{"project":"kervan","runbookId":"pm2_restart","params":{"app":"KERVAN"},"approvalId":"AAAAAAAAAAAAAAAA","incidentId":"test","approvalToken":"x","planDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tokenExpiresAt":1}' \
   http://localhost/v1/runbooks/execute; echo
 pm2 jlist | grep -o '"restart_time":[0-9]*' | head -2
 ```
@@ -375,12 +400,14 @@ Avval runner ishlayotganini tekshiring (6.5), keyin:
 
 ```bash
 cd /opt/incidentpulse/app
+$COMPOSE up -d --wait postgres
+$COMPOSE --profile migrate run --rm --no-deps migrate
 $COMPOSE up -d
 sleep 90
 $COMPOSE ps
 ```
 
-**Kutilgan natija**: 8 xizmatning hammasi `Up ... (healthy)` (postmortem-crew birinchi marta ~1 daqiqa olishi mumkin). `docker-proxy` va `orchestrator` `dockerapi` tarmog'ida.
+**Kutilgan natija**: Migratsiya `roles incidentpulse_app and incidentpulse_web are configured` deb chiqadi. 9 runtime xizmat `Up ... (healthy)` bo'ladi. Orchestrator adapter'ga `dockerread` orqali ulanadi. Adapter va proxy alohida `dockerproxy` tarmog'ida.
 
 ```bash
 $COMPOSE logs --tail 30 orchestrator
@@ -401,6 +428,19 @@ free -h
 ---
 
 ## 9. Web: nginx vhost + certbot
+
+Loopback upstream uchun nginx'ning proxy header'ini yarating. Nginx mijoz yuborgan `X-Forwarded-For` va `X-IncidentPulse-Proxy` qiymatlarini almashtiradi.
+
+```bash
+(
+  set -eu
+  umask 077
+  proxy_secret="$(sed -n 's/^WEB_PROXY_SECRET=//p' /opt/incidentpulse/secrets/.env)"
+  printf '%s\n' "$proxy_secret" | grep -Eq '^[a-f0-9]{64}$'
+  install -m 0600 -o root -g root /dev/null /etc/nginx/snippets/incidentpulse-web-proxy.conf
+  printf 'proxy_set_header X-IncidentPulse-Proxy "%s";\n' "$proxy_secret" > /etc/nginx/snippets/incidentpulse-web-proxy.conf
+)
+```
 
 ```bash
 grep -n proxy_pass /opt/incidentpulse/app/deploy/nginx/incidentpulse.gotrips.cloud.conf     # http://127.0.0.1:3100 (WEB_HOST_PORT bilan bir xil bo'lsin)
@@ -432,12 +472,18 @@ Brauzerda `https://incidentpulse.gotrips.cloud` → login → `WEB_ADMIN_PASSWOR
 
 ## 10. To'liq tekshiruv
 
-**a) Faqat o'qish: Docker proxy POST ni rad etadi**
+**a) Docker o'qish chegarasi**
 ```bash
-$COMPOSE exec -T orchestrator docker ps -a --format '{{.Names}}' | head -3
-$COMPOSE exec -T orchestrator docker restart "$(docker ps -q | head -1)" 2>&1 | head -2
+$COMPOSE exec -T orchestrator node -e '
+const base = process.env.DOCKER_READ_ADAPTER_URL;
+for (const path of ["/containers/json?all=1", "/containers/example/json", "/containers/example/stats"]) {
+  const response = await fetch(base + path);
+  console.log(path, response.status);
+  if (response.ok) console.log(await response.text());
+}
+'
 ```
-**Kutilgan natija**: birinchisi konteyner nomlarini chiqaradi (proxy nomlarni filtrlamaydi; filtr mcp-infra'da). Ikkinchisi `Forbidden` / `403` xatosi beradi va hech narsa restart bo'lmaydi.
+**Kutilgan natija**: container ro'yxati `200`, nomlar allowlist prefikslariga mos, `Labels` va `Mounts` chiqmaydi. Inspect va stats `403`. `docker-proxy` orchestrator tarmog'iga ulanmagan.
 
 **b) Orchestrator runner'ga yetadi**
 ```bash
@@ -454,7 +500,7 @@ $COMPOSE logs orchestrator | grep -E 'health poll' | tail -3
 **d) Telegram**: botga `/status` yuboring.
 **Kutilgan natija**: `Tergovlar: faol · pauzada 0` va `Haftalik xarajat: $0.xxxx / $0.50`. Ruxsat etilmagan foydalanuvchi buyruq yuborsa e'tiborga olinmaydi.
 
-**e) Kill-switch**: `/stop` → tergovlar to'xtaydi, `/resume` → davom etadi. Runner'ni butunlay o'chirish (barcha o'zgartirishlar to'xtaydi, o'qish qoladi): `systemctl stop incidentpulse-actions`.
+**e) Kill-switch**: `/stop` tergov va runner'ni pauzaga qo'yadi hamda bajarilayotgan va navbatdagi ishlarni ko'rsatadi. Joriy buyruq tugashi mumkin. Keyingi qadam pauzada boshlanmaydi. `/resume` ikkala pauzadan chiqaradi. Runner holatini Unix socket orqali `GET /v1/status` bilan tekshiring.
 
 **f) Qo'lda tergov** (keshni chetlab o'tadi, haftalik byudjetdan ayriladi): Telegram'da `/investigate kervan`.
 
@@ -462,13 +508,86 @@ $COMPOSE logs orchestrator | grep -E 'health poll' | tail -3
 
 ## 11. Rollback va yangilash
 
-**Yangilash (xavfsiz tartib)**
+### Yangilash: approval, host runner va Docker o'qish chegaralari
+
+Joriy ishlarning tugashini kuting, so'ng eski orchestrator va web'ni to'xtating. Env, runner kodi va nginx vhost nusxalarini root uchun yopiq katalogga oling. `POSTGRES_PASSWORD` qiymatini saqlang. Migratsiya reja digest'i bo'lmagan ochiq takliflarni yopib, audit'ga yozadi. Ular uchun yangi taklif kerak.
+
+```bash
+cd /opt/incidentpulse/app
+export COMPOSE="docker compose --env-file /opt/incidentpulse/secrets/.env -f compose.prod.yaml"
+$COMPOSE stop orchestrator web
+systemctl stop incidentpulse-actions
+backup="$(mktemp -d /opt/incidentpulse/secrets/before-hardening.XXXXXXXX)"
+cp -a /opt/incidentpulse/secrets/.env /etc/incidentpulse/actions-runner.env "$backup/"
+cp -a /opt/incidentpulse/actions-runner "$backup/runner"
+cp -a /etc/nginx/sites-available/incidentpulse.gotrips.cloud.conf "$backup/"
+git pull --ff-only
+export IP_TAG=$(git rev-parse --short HEAD)
+```
+
+Birinchi yangilashda `APPROVAL_HMAC_SECRET` eski qiymatini `openssl rand -hex 32` bilan almashtiring. `CALLBACK_HMAC_SECRET`, `APP_DB_PASSWORD`, `WEB_DB_PASSWORD` va `WEB_PROXY_SECRET` uchun to'rtta alohida `openssl rand -hex 32` ishlating. 4-bo'limdagidek har nomga bitta qator qoldiring. 6.5-bo'limdagi blok bilan `/etc/incidentpulse/actions-runner.env` ni qayta yarating. Keyin runner kodini qayta nusxalang:
+
+```bash
+install -d -m 0755 -o root -g root /opt/incidentpulse/actions-runner
+cp -r host/actions-runner/src host/actions-runner/scripts /opt/incidentpulse/actions-runner/
+chown -R root:root /opt/incidentpulse/actions-runner
+chmod -R go-w /opt/incidentpulse/actions-runner
+```
+
+6.4-bo'limdagi tartib bilan sudoers'ni qayta render qiling va tekshirilgan nusxani o'rnating:
+
+```bash
+(
+  set -eu
+  test "$(id -u)" -eq 0
+  umask 077
+  sudoers_dir="$(mktemp -d /tmp/incidentpulse-sudoers.XXXXXXXX)"
+  sudoers_file="$sudoers_dir/incidentpulse-actions"
+  cleanup_sudoers() {
+    if test -f "$sudoers_file"; then unlink "$sudoers_file"; fi
+    rmdir "$sudoers_dir"
+  }
+  trap cleanup_sudoers EXIT
+  chmod 0700 "$sudoers_dir"
+  /opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json > "$sudoers_file"
+  visudo -cf "$sudoers_file"
+  install -m 0440 -o root -g root "$sudoers_file" /etc/sudoers.d/incidentpulse-actions
+  visudo -c
+)
+```
+
+**Kutilgan natija**: ikkala `visudo` tekshiruvi muvaffaqiyatli. Shundan keyin runner va yangi runtime xizmatlarini ishga tushiring:
+
+```bash
+install -m 0644 host/actions-runner/deploy/incidentpulse-actions.service /etc/systemd/system/incidentpulse-actions.service
+systemctl daemon-reload
+systemctl restart incidentpulse-actions
+systemctl is-active incidentpulse-actions
+curl -fsS --unix-socket /run/incidentpulse/actions.sock http://localhost/v1/status
+$COMPOSE config --quiet
+$COMPOSE build
+$COMPOSE up -d --wait postgres
+$COMPOSE --profile migrate run --rm --no-deps migrate
+$COMPOSE up -d --wait
+$COMPOSE ps
+```
+
+9-bo'limdagi blok bilan nginx'ning `incidentpulse-web-proxy.conf` snippet'ini yarating. **Mavjud HTTPS vhost'ni saqlang.** Uning `location /` blokida `X-Forwarded-For` direktivasini `proxy_set_header X-Forwarded-For $remote_addr;` bilan almashtiring va undan keyin `include /etc/nginx/snippets/incidentpulse-web-proxy.conf;` ni qo'shing. `nginx -t && systemctl reload nginx` ni bajaring.
+
+**Kutilgan natija**: runner `active`, socket status'i `paused` va navbatni ko'rsatadi. Migratsiya ikki runtime rolini tayyorlaydi. `docker-read-adapter` sog'lom, 10a tekshiruvi `200, 403, 403` beradi. HTTPS login ishlaydi. Keyingi yangi taklifda Telegram va web loyiha, aniq parametrlar va SHA-256 rejasini ko'rsatadi. `/stop` va `/resume` runner holatini ham bildiradi.
+
+Bu yangilanishni qaytarishda eski imijlarni ishga tushirishdan avval `$backup` dan `.env`, `actions-runner.env`, runner kodi va nginx vhost'ni birgalikda tiklang. Eski runner kodi bilan 6.4 sudoers tartibini bajaring, runner'ni qayta ishga tushiring va `nginx -t && systemctl reload nginx` ni bajaring. Migratsiya yopgan eski takliflar yopiq qoladi.
+
+### Yangilash (odatdagi tartib)
 ```bash
 cd /opt/incidentpulse/app
 git fetch origin && git log --oneline HEAD..origin/main     # nima kelayotganini ko'ring
 git pull --ff-only
 export IP_TAG=$(git rev-parse --short HEAD)
-$COMPOSE build && $COMPOSE up -d
+$COMPOSE build
+$COMPOSE up -d --wait postgres
+$COMPOSE --profile migrate run --rm --no-deps migrate
+$COMPOSE up -d
 ```
 **Yangilash: deep health (mixed content + API tekshiruvi)**
 
@@ -584,9 +703,9 @@ curl -sI http://127.0.0.1 -H 'Host: kervan.uz' | head -1       # Kervan javobi (
 | 3 | Infra mutaxassisi | `nginx_config` (`nginx -T`, barcha include'lar) → `kervan.uz vhost=present listen=80 ssl=false proxy=http://localhost:3000/`; `cert_list` → `kervan.uz cert=missing`; `tls_inspect` → `hostnameMatch=false` yoki ulanish xatosi | Dalil qatorlari |
 | 4 | Logs mutaxassisi | `pm2_list` (ikkalasi `online`), `pm2_ports` → `KERVAN ports=3000…` | – |
 | 5 | Debate verifier | Gipoteza "kervan.uz uchun 443 blok va sertifikat yo'q" ishonch ≥ 0.7 | – |
-| 6 | Taklif | Ishonchli (LLM'siz) **inventar** (runner, `nginx -T` + `certbot certificates`): vhost **bor**, sertifikat **yo'q** → faqat `certbot_nginx_issue(kervan.uz)`. **`nginx_site_proxy` taklif qilinmaydi** (runner va root yordamchi ham `server_name` bor bo'lsa qat'iy rad etadi). Dry-run: runner inventarni qayta tekshiradi, keyin `certbot certonly --dry-run --non-interactive --nginx -d kervan.uz` (Let's Encrypt staging) | **Telegram**: `Taklif: certbot_nginx_issue(kervan.uz) · medium · dry-run ✅` + [✅ Bajar] [❌ Rad et] [🔍 Batafsil] |
+| 6 | Taklif | Ishonchli (LLM'siz) **inventar** (runner, `nginx -T` + `certbot certificates`): vhost **bor**, sertifikat **yo'q** → faqat `certbot_nginx_issue(kervan.uz)`. **`nginx_site_proxy` taklif qilinmaydi** (runner va root yordamchi ham `server_name` bor bo'lsa qat'iy rad etadi). Dry-run: runner vhost, DNS A, sertifikat holati va `nginx -t` ni tekshiradi | **Telegram**: `Taklif: certbot_nginx_issue(kervan.uz) · medium · dry-run ✅` + [✅ Bajar] [❌ Rad et] [🔍 Batafsil] |
 | 7 | **Siz** | `🔍 Batafsil` bilan dalil va dry-run'ni o'qing, keyin **✅ Bajar** | `Tasdiqlandi.` |
-| 8 | Runner | Token (HMAC, 15 daq, bir martalik) → inventar yana tekshiriladi → `certbot --nginx -d kervan.uz --non-interactive --redirect` (mavjud `conf.d/kervan.conf` blokiga 443 + sertifikat, va 80→443 redirect) → `nginx -t` | Natija `Batafsil` da |
+| 8 | Runner | Token (HMAC, 15 daq, bir martalik) → inventar yana tekshiriladi → `certbot certonly --dry-run --non-interactive --nginx -d kervan.uz` (staging) → muvaffaqiyatli bo'lsa `certbot --nginx -d kervan.uz --non-interactive --redirect` (mavjud `conf.d/kervan.conf` blokiga 443 + sertifikat, va 80→443 redirect) → `nginx -t` | Natija `Batafsil` da |
 | 9 | Recovery tekshiruvi | `https://kervan.uz/` → 200 → **recovered** | **Telegram: 🟢 tiklandi**, postmortem havolasi |
 | 10 | Postmortem crew | Researcher → Reviewer → Writer, web'da `/postmortems/<id>` | – |
 
@@ -628,7 +747,7 @@ curl -s http://127.0.0.1:3000/ | head -c 300
 - Dry-run `nginx already has a server block … but none names www.kervan.uz` → policy yoki scope'da `"www": true` qolib ketgan: ikkalasida `false` qiling (6.3, 5-bo'lim), runner'ni qayta ishga tushiring va orchestrator'ni qayta yarating (`$COMPOSE up -d --force-recreate orchestrator`).
 - Dry-run `No nginx server block for kervan.uz; create the vhost first` → `nginx -T` `kervan.uz` ni ko'rmayapti (blok include qilinmagan?): `nginx -T | grep -n server_name`. `nginx_site_proxy` taklif qilinganini ko'rsangiz, ya'ni inventar vhost yo'q deb hisoblayapti: shu buyruq natijasini va 6.6 dagi `nginx_config` ni solishtiring.
 - Dry-run `Certificates for these names already exist; use certbot_renew` → sertifikat allaqachon bor (`certbot certificates`); muammo boshqa joyda.
-- Dry-run `certbot ... --dry-run` xato → DNS A yozuvi shu serverga qaramaydi, 80-port firewall'da yopiq yoki Let's Encrypt staging limiti: `/var/log/letsencrypt/letsencrypt.log`. Dry-run webroot emas, nginx autentifikatori bilan ishlaydi (bu vaqtda certbot `conf.d/kervan.conf` ga vaqtincha challenge location qo'shib, nginx'ni reload qiladi va keyin qaytaradi; Kervan vhost'ida ACME location yo'q, shuning uchun webroot usuli ishlamas edi).
+- Tasdiqdan keyingi staging `certbot ... --dry-run` xato → DNS A yozuvi shu serverga qaramaydi, 80-port firewall'da yopiq yoki Let's Encrypt staging limiti: `/var/log/letsencrypt/letsencrypt.log`. Dry-run webroot emas, nginx autentifikatori bilan ishlaydi (bu vaqtda certbot `conf.d/kervan.conf` ga vaqtincha challenge location qo'shib, nginx'ni reload qiladi va keyin qaytaradi; Kervan vhost'ida ACME location yo'q, shuning uchun webroot usuli ishlamas edi).
 - Bajarishda xato → certbot konfiguratsiyani o'zi qaytaradi; `nginx -t` ni tekshiring, kerak bo'lsa 11-bo'limdagi qo'lda zaxiradan tiklang.
 - Telegram'da tugma bosilmasa: 60 daqiqadan keyin `tasdiqlash muddati tugadi, inson ko'rigi kutilmoqda`; `/investigate kervan` bilan qayta boshlang.
 

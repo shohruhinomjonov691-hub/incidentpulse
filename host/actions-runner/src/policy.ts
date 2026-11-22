@@ -4,6 +4,8 @@
  * hand (the runner has no dependencies) and validated strictly: unknown keys are errors.
  */
 
+import { isIP } from "node:net";
+
 export const BIN_NAMES = [
   "sudo",
   "certbot",
@@ -57,6 +59,11 @@ export interface Policy {
   installDir: string;
   /** Lowest upstream port nginx_site_proxy may point at. */
   upstreamPortMin: number;
+  /**
+   * This server's public IPv4 addresses: the A records of a domain must point here before certbot_nginx_issue
+   * is approved. Unset = every non-internal IPv4 address of the host's network interfaces.
+   */
+  publicIps?: string[];
 }
 
 const DOMAIN =
@@ -100,7 +107,7 @@ function strings(value: unknown, where: string, check: (s: string) => boolean): 
 
 export function parsePolicy(input: unknown): Policy {
   const root = obj(input, "policy");
-  noExtraKeys(root, ["projects", "bins", "installDir", "upstreamPortMin"], "policy");
+  noExtraKeys(root, ["projects", "bins", "installDir", "upstreamPortMin", "publicIps"], "policy");
 
   const bins: Bins = { ...DEFAULT_BINS };
   if (root.bins !== undefined) {
@@ -121,6 +128,17 @@ export function parsePolicy(input: unknown): Policy {
   const min = root.upstreamPortMin === undefined ? 1024 : root.upstreamPortMin;
   if (typeof min !== "number" || !Number.isInteger(min) || min < 1024 || min > 65535) {
     throw new PolicyError("upstreamPortMin: expected an integer between 1024 and 65535");
+  }
+
+  let publicIps: string[] | undefined;
+  if (root.publicIps !== undefined) {
+    if (
+      !Array.isArray(root.publicIps) ||
+      root.publicIps.some((ip) => typeof ip !== "string" || isIP(ip) !== 4)
+    ) {
+      throw new PolicyError("publicIps: expected a list of IPv4 addresses");
+    }
+    publicIps = [...new Set(root.publicIps as string[])].sort();
   }
 
   const projects: Record<string, ProjectPolicy> = {};
@@ -160,7 +178,7 @@ export function parsePolicy(input: unknown): Policy {
     }
     projects[id] = project;
   }
-  return { projects, bins, installDir, upstreamPortMin: min };
+  return { projects, bins, installDir, upstreamPortMin: min, ...(publicIps ? { publicIps } : {}) };
 }
 
 /** Every domain the policy covers, including the www sibling where enabled. */

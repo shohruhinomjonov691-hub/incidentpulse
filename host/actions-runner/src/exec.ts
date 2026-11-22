@@ -25,8 +25,14 @@ export const execFileExec: Exec = (file, args, { timeoutMs, maxBuffer }) =>
       (error, stdout, stderr) => {
         if (!error) return resolve({ code: 0, stdout, stderr });
         const code = typeof error.code === "number" ? error.code : 1;
-        const reason = typeof error.code === "string" ? `\n${error.code}: ${error.message}` : "";
-        resolve({ code, stdout: stdout ?? "", stderr: `${stderr ?? ""}${reason}` });
+        if (typeof error.code === "string" || error.killed) {
+          return resolve({
+            code,
+            stdout: "",
+            stderr: `Command failed: ${error.code ?? "ABORTED"}`,
+          });
+        }
+        resolve({ code, stdout, stderr });
       },
     );
   });

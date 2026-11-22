@@ -52,14 +52,18 @@ export function parsePm2Jlist(stdout: string, allowed: readonly string[]): Pm2Ap
 
 const MAX_LOG_LINE = 400;
 
-/** The last `lines` lines of `pm2 logs --nostream`, without pm2's own headers. */
+/**
+ * The last `lines` lines of `pm2 logs --nostream`, without pm2's own headers. The WHOLE text is scrubbed
+ * before it is split into lines and before any line is cut: a long secret or a multi-line private key must
+ * match its full pattern, and a cut can never leave a fragment of one behind.
+ */
 export function parsePm2Logs(output: string, lines: number): string[] {
-  return output
+  return scrub(output)
     .split("\n")
     .map((l) => l.replace(/\r$/, ""))
     .filter((l) => l.trim().length > 0 && !/^\[TAILING\]/.test(l))
     .slice(-lines)
-    .map((l) => scrub(l.length > MAX_LOG_LINE ? `${l.slice(0, MAX_LOG_LINE)}…` : l));
+    .map((l) => (l.length > MAX_LOG_LINE ? `${l.slice(0, MAX_LOG_LINE)}…` : l));
 }
 
 // ---------------------------------------------------------------------- ports

@@ -21,7 +21,8 @@ describe("runbook registry", () => {
     });
     expect(book.risk).toBe("medium");
     expect(book.prerequisite).toBe("missing_certificate_or_vhost");
-    expect(book.dryRun[0]?.args.slice(0, 2)).toEqual(["certonly", "--dry-run"]);
+    expect(book.dryRun).toEqual([{ program: "nginx", args: ["-t"] }]);
+    expect(book.run[0]?.args.slice(0, 2)).toEqual(["certonly", "--dry-run"]);
     expect(book.run[0]).toMatchObject({
       program: "certbot",
       args: expect.arrayContaining(["--nginx", "-d", "local.example"]),
@@ -63,8 +64,18 @@ describe("production runbooks", () => {
       runbookId: "certbot_nginx_issue",
       params: { domain: "kervan.uz" },
     });
-    expect(book.dryRun[0]?.args.slice(-4)).toEqual(["-d", "kervan.uz", "-d", "www.kervan.uz"]);
+    expect(book.dryRun).toEqual([{ program: "nginx", args: ["-t"] }]);
     expect(book.run[0]?.args).toEqual([
+      "certonly",
+      "--dry-run",
+      "--non-interactive",
+      "--nginx",
+      "-d",
+      "kervan.uz",
+      "-d",
+      "www.kervan.uz",
+    ]);
+    expect(book.run[1]?.args).toEqual([
       "--nginx",
       "-d",
       "kervan.uz",

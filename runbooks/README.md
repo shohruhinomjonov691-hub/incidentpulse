@@ -6,8 +6,8 @@ In production the commands run in the host actions runner (`host/actions-runner`
 
 | Runbook | Dry run or check | Target |
 |---|---|---|
-| `certbot_renew` | Certbot staging renewal | Configured domain with evidence of expiry |
-| `certbot_nginx_issue` | Inventory check and Certbot staging issuance with the nginx authenticator (same as the real run) | Configured domain missing a certificate or Nginx vhost |
+| `certbot_renew` | `nginx -t` and a certificate-exists check. `certbot renew --dry-run` is the first step AFTER approval (it may edit the live nginx) | Configured domain with evidence of expiry |
+| `certbot_nginx_issue` | Static only: vhost exists, DNS A points at this server, certificate missing or stale, `nginx -t`. The staging run `certonly --dry-run --nginx` (it edits and reloads the live nginx) is the first step AFTER approval; a failure stops the run | Configured domain with an existing vhost and a missing or stale certificate |
 | `nginx_reload` | `nginx -t` | Host assigned to the project |
 | `docker_restart` | Inspect the exact container | Allowlisted container name |
 | `pm2_restart` | Describe the exact app | Allowlisted PM2 app name |

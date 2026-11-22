@@ -58,6 +58,7 @@ describe("runner client", () => {
         approvalId: "a",
         incidentId: "i",
         approvalToken: "t",
+        planDigest: "a".repeat(64),
         tokenExpiresAt: 1,
       }),
     ).toEqual({ ok: false, output: "Approval token is invalid" });

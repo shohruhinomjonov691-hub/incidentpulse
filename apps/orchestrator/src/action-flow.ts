@@ -6,6 +6,8 @@ import {
   createApprovalCallbacks,
   dryRun,
   ExecutionResultSchema,
+  localPlan,
+  type PlanInfo,
   type RemoteExecutor,
   type ResolvedRunbook,
   type RunbookRegistry,
@@ -53,6 +55,7 @@ export async function createActionFlow(options: {
   remote?: RemoteExecutor;
   redact: Redactor;
   notifier: Notifier;
+  /** CALLBACK_HMAC_SECRET: signs the Approve/Reject buttons. Not the execution-token key. */
   callbackSecret: string;
 }) {
   const { approvals, registry, controls, remote, redact, notifier } = options;
@@ -78,8 +81,20 @@ export async function createActionFlow(options: {
   return {
     approvals,
     controls,
-    dryRun: (book: ResolvedRunbook, project: ProjectId) =>
-      remote ? remote.dryRun(project, book) : dryRun(book, run, redact),
+    /** The canonical plan (digest + human summary) the approval will be bound to. */
+    async plan(book: ResolvedRunbook, project: ProjectId): Promise<PlanInfo> {
+      const plan = remote ? await remote.plan(project, book) : localPlan(project, book);
+      return { ...plan, summary: redact(plan.summary).slice(0, 1500) };
+    },
+    /**
+     * Pre-approval check. Static only: nothing here touches the live nginx (the runner's staging runs happen
+     * after approval). Remote output is redacted here, before it can reach the database or the model.
+     */
+    async dryRun(book: ResolvedRunbook, project: ProjectId) {
+      if (!remote) return dryRun(book, run, redact);
+      const result = await remote.dryRun(project, book);
+      return { ok: result.ok, output: redact(result.output).trim().slice(0, 2000) || "OK" };
+    },
     async notify(
       approval: Approval,
       state: GraphState,
@@ -88,6 +103,9 @@ export async function createActionFlow(options: {
     ) {
       if (approval.notifiedAt || approval.status !== "pending") return;
       const tag = Object.values(approval.params).join(", ");
+      const plan = approval.planSummary
+        ? `Reja (sha256 ${approval.planDigest ?? "?"}):\n${approval.planSummary}\n\n`
+        : "";
       const report = formatReport({
         ...state,
         verdict: state.verdict ?? undefined,
@@ -95,9 +113,9 @@ export async function createActionFlow(options: {
         weeklyBudgetUsd,
       }).replace(
         /^Taklif: .+$/m,
-        `Taklif: ${approval.runbookId}(${tag}) · ${approval.risk} · dry-run ✅`,
+        () => `Taklif: ${approval.runbookId}(${tag}) · ${approval.risk} · dry-run ✅`,
       );
-      await notifier.send(redact(report), [
+      await notifier.send(redact(`${plan}${report}`).slice(0, 3900), [
         [
           { text: "✅ Bajar", callback_data: callbacks.encode(approval.id, "a") },
           { text: "❌ Rad et", callback_data: callbacks.encode(approval.id, "r") },
@@ -110,6 +128,10 @@ export async function createActionFlow(options: {
       if (approval.execution) return approval.execution;
       if (approval.consumedAt)
         return { ok: false, output: "Previous execution outcome is unknown" };
+      // A row whose plan no longer matches the signature made at proposal time is never executed.
+      if (!approvals.planIsIntact(approval) || !approval.planDigest) {
+        return { ok: false, output: "Approval plan integrity check failed; nothing was run" };
+      }
       const approvalToken = await approvals.issueToken(approval);
       if (!approvalToken) return { ok: false, output: "Approval token expired or already used" };
       const result = await client.callTool(
@@ -122,6 +144,7 @@ export async function createActionFlow(options: {
             runbookId: approval.runbookId,
             params: approval.params,
             approvalToken,
+            planDigest: approval.planDigest,
             tokenExpiresAt: approvals.tokenExpiry(approval),
           },
         },
@@ -139,7 +162,14 @@ export async function createActionFlow(options: {
         return {
           answer: "Tafsilot yuborildi.",
           details: redact(
-            [row.details, `Runbook: ${row.runbookId}`, `Dry-run: ${row.dryRunOutput}`].join("\n"),
+            [
+              row.details,
+              `Runbook: ${row.runbookId}`,
+              ...(row.planSummary
+                ? [`Reja (sha256 ${row.planDigest ?? "?"}):`, row.planSummary]
+                : []),
+              `Dry-run: ${row.dryRunOutput}`,
+            ].join("\n"),
           ),
         };
       }

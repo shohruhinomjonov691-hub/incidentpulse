@@ -100,7 +100,11 @@ jobs:
           DEBATE_SHARED_SECRET: x
           POSTMORTEM_SHARED_SECRET: x
           APPROVAL_HMAC_SECRET: x
+          CALLBACK_HMAC_SECRET: y
+          APP_DB_PASSWORD: x
+          WEB_DB_PASSWORD: x
           WEB_ADMIN_PASSWORD: x
+          WEB_PROXY_SECRET: x
           IPC_GID: "990"
           PROJECT_DOMAINS_JSON: "{}"
           PROJECT_CONTAINERS_JSON: "{}"
@@ -117,6 +121,19 @@ jobs:
           assert total <= 2048, f"memory budget exceeded: {total} MiB"
           assert published == [("web", "127.0.0.1", "3100")], f"only web on 127.0.0.1:3100 (default) may publish a port: {published}"
           print(f"ok: {len(services)} services, {total:.0f} MiB, published {published}")
+          # Key, role and network separation (docs/SECURITY-REVIEW.md H2, H4).
+          nets = lambda n: set(services[n].get("networks") or {})
+          env = lambda n: services[n].get("environment") or {}
+          assert "APPROVAL_HMAC_SECRET" not in env("web"), "web must not hold the execution-token key"
+          assert "CALLBACK_HMAC_SECRET" in env("web") and "APPROVAL_HMAC_SECRET" in env("orchestrator")
+          assert env("web")["DATABASE_URL"].startswith("postgres://incidentpulse_web:"), "web needs its own DB role"
+          assert env("orchestrator")["DATABASE_URL"].startswith("postgres://incidentpulse_app:"), "orchestrator needs the app role"
+          assert "DOCKER_HOST" not in env("orchestrator") and "docker-proxy" not in str(env("orchestrator")), "orchestrator must not reach docker-proxy"
+          assert nets("docker-proxy") == {"dockerproxy"}, nets("docker-proxy")
+          assert nets("docker-read-adapter") == {"dockerread", "dockerproxy"}, nets("docker-read-adapter")
+          assert not (nets("orchestrator") & nets("docker-proxy")), "orchestrator and docker-proxy must share no network"
+          assert "dockerread" in nets("orchestrator")
+          print("ok: keys, roles and docker networks are separated")
           '
           # WEB_HOST_PORT moves the host side only (3000 is Kervan's on the production server); empty = default.
           for value in 3150 ""; do

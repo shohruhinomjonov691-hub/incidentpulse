@@ -1,8 +1,13 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApprovalStore } from "@incidentpulse/mcp-actions/approvals";
+import {
+  canonicalJson as orchestratorCanonicalJson,
+  planDigest as orchestratorPlanDigest,
+} from "@incidentpulse/mcp-actions";
+import { signExecutionToken } from "@incidentpulse/mcp-actions/approvals";
 import { describe, expect, test } from "vitest";
+import { canonicalJson, planDigest } from "../src/plan.ts";
 import {
   checkApprovalToken,
   createFileLedger,
@@ -17,26 +22,45 @@ const claims = {
   project: "kervan",
   runbookId: "nginx_site_proxy",
   params: { upstream: "127.0.0.1:3000", domain: "kervan.uz" },
+  planDigest: "a".repeat(64),
   tokenExpiresAt: 1_800_000_000_000 + TOKEN_LIFETIME_MS,
 };
 
 describe("approval token", () => {
-  test("is byte-identical to the token the orchestrator's approval store issues", async () => {
-    const decidedAt = new Date(1_800_000_000_000);
-    const store = createApprovalStore(
-      { query: async () => ({ rowCount: 1, rows: [] }) } as never,
-      SECRET,
-    );
-    const issued = await store.issueToken({
-      id: claims.approvalId,
-      incidentId: claims.incidentId,
+  test("is byte-identical to the token the orchestrator signs (APPROVAL_HMAC_SECRET)", () => {
+    expect(signExecutionToken(SECRET, claims)).toBe(signApproval(SECRET, claims));
+  });
+
+  test("the plan digest is computed identically by the orchestrator and the runner", () => {
+    const input = {
       project: "kervan",
       runbookId: "nginx_site_proxy",
-      params: claims.params,
-      status: "approved",
-      decidedAt,
-    } as never);
-    expect(issued).toBe(signApproval(SECRET, claims));
+      params: { upstream: "127.0.0.1:3000", domain: "kervan.uz" },
+      policyDigest: "b".repeat(64),
+    };
+    expect(orchestratorPlanDigest(input)).toBe(planDigest(input));
+    // key order of the parameters never changes the digest
+    expect(
+      planDigest({ ...input, params: { domain: "kervan.uz", upstream: "127.0.0.1:3000" } }),
+    ).toBe(planDigest(input));
+    const sample = { b: [1, { z: 1, a: "x" }], a: null, c: undefined };
+    expect(canonicalJson(sample)).toBe(orchestratorCanonicalJson(sample));
+    expect(canonicalJson(sample)).toBe('{"a":null,"b":[1,{"a":"x","z":1}]}');
+  });
+
+  test("a different plan digest is a different token", () => {
+    expect(signApproval(SECRET, { ...claims, planDigest: "c".repeat(64) })).not.toBe(
+      signApproval(SECRET, claims),
+    );
+    const token = signApproval(SECRET, claims);
+    expect(
+      checkApprovalToken(
+        SECRET,
+        { ...claims, planDigest: "c".repeat(64) },
+        token,
+        claims.tokenExpiresAt - 60_000,
+      ),
+    ).toBe("Approval token is invalid");
   });
 
   test("accepts a valid unexpired token", () => {
@@ -84,5 +108,30 @@ describe("ledger", () => {
     expect(restarted.claim("AAAAAAAAAAAAAAAA", 4)).toBe(false);
     expect(restarted.claim("BBBBBBBBBBBBBBBB", 4)).toBe(true);
     expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(3);
+  });
+
+  test("refusals and failed steps are written to the audit file without consuming the approval", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "ip-ledger-")), "consumed.jsonl");
+    const ledger = createFileLedger(path);
+    ledger.refuse("AAAAAAAAAAAAAAAA", "expired_in_queue", 5);
+    expect(createFileLedger(path).claim("AAAAAAAAAAAAAAAA", 6)).toBe(true);
+    ledger.complete("BBBBBBBBBBBBBBBB", false, 7, 1);
+    const rows = readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(rows).toContainEqual({
+      event: "refused",
+      approvalId: "AAAAAAAAAAAAAAAA",
+      reason: "expired_in_queue",
+      at: 5,
+    });
+    expect(rows).toContainEqual({
+      event: "completed",
+      approvalId: "BBBBBBBBBBBBBBBB",
+      ok: false,
+      at: 7,
+      failedStep: 1,
+    });
   });
 });

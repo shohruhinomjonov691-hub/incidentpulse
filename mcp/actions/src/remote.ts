@@ -1,6 +1,7 @@
 import { type RunnerClient, RunnerError } from "@incidentpulse/runner-client";
 import type { ProjectId } from "@incidentpulse/schemas";
 import type { ExecutionResult } from "./approvals.ts";
+import type { PlanInfo } from "./plan.ts";
 import type { ResolvedRunbook } from "./registry.ts";
 
 /**
@@ -9,6 +10,9 @@ import type { ResolvedRunbook } from "./registry.ts";
  * its own single-use ledger, so a compromised orchestrator still cannot run anything outside its policy.
  */
 export interface RemoteExecutor {
+  /** The canonical plan from the runner's own policy, bound to the approval at proposal time. */
+  plan(project: ProjectId, book: ResolvedRunbook): Promise<PlanInfo>;
+  /** Static pre-approval checks only (see runner `dryRun`): nothing here touches the live nginx. */
   dryRun(project: ProjectId, book: ResolvedRunbook): Promise<ExecutionResult>;
   execute(
     request: {
@@ -16,6 +20,7 @@ export interface RemoteExecutor {
       incidentId: string;
       approvalId: string;
       approvalToken: string;
+      planDigest: string;
       tokenExpiresAt?: number | undefined;
     },
     book: ResolvedRunbook,
@@ -28,6 +33,14 @@ export function createRemoteExecutor(client: RunnerClient): RemoteExecutor {
     output: `Host runner unavailable: ${error instanceof RunnerError ? error.code : "unknown error"}`,
   });
   return {
+    async plan(project, book) {
+      const plan = await client.plan({ project, runbookId: book.runbookId, params: book.params });
+      return {
+        planDigest: plan.planDigest,
+        policyDigest: plan.policyDigest,
+        summary: plan.summary.join("\n"),
+      };
+    },
     async dryRun(project, book) {
       try {
         return await client.dryRun({
@@ -49,6 +62,7 @@ export function createRemoteExecutor(client: RunnerClient): RemoteExecutor {
           approvalId: request.approvalId,
           incidentId: request.incidentId,
           approvalToken: request.approvalToken,
+          planDigest: request.planDigest,
           tokenExpiresAt: request.tokenExpiresAt,
         });
       } catch (error) {

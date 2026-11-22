@@ -37,6 +37,11 @@ test("login, incident list and live timeline", async ({ page }, testInfo) => {
   await expect(page.getByText("● Live")).toBeVisible();
   await expect(page.getByText("intake · started")).toBeVisible();
   await expect(page.getByText("Tool call · tls_inspect")).toBeVisible();
+  const target = page.getByTestId("approval-target");
+  await expect(target).toContainText("kervan");
+  await expect(target).toContainText("kervan.uz");
+  await expect(target).toContainText("127.0.0.1:3000");
+  await expect(page.getByText(/Exact plan · sha256 [a-f0-9]{12}/)).toBeVisible();
 
   // An event written after the page loaded must arrive over SSE without a reload.
   const url = new URL(process.env.IT_DATABASE_URL ?? "");

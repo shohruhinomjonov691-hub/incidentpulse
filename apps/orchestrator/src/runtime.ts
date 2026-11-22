@@ -8,7 +8,7 @@ import {
   loadRunbookRegistry,
 } from "@incidentpulse/mcp-actions";
 import { describeError, type Redactor } from "@incidentpulse/redact";
-import { createRunnerClient } from "@incidentpulse/runner-client";
+import { createRunnerClient, RunnerError, type RunnerStatus } from "@incidentpulse/runner-client";
 import {
   createInvestigationBot,
   createTelegramNotifier,
@@ -40,6 +40,22 @@ import { createRecoveryCheck } from "./recovery.ts";
 import { createRemediationProposer } from "./remediation-proposer.ts";
 import { createRedisWeeklyBudget, reserveWeekly } from "./weekly-budget.ts";
 import { createIncidentWorker } from "./worker.ts";
+
+/** One block for the /stop, /resume and /status replies: runner state, running and queued jobs. */
+export function formatRunnerStatus(status: RunnerStatus): string {
+  const job = (j: RunnerStatus["running"][number]) =>
+    `${j.runbookId}(${j.project})${j.approvalId ? ` #${j.approvalId}` : ""}`;
+  return [
+    `Runner: ${status.paused ? "pauzada" : "faol"}`,
+    `Bajarilmoqda: ${status.running.length ? status.running.map(job).join(", ") : "yo‘q"}`,
+    `Navbatda: ${status.queued.length ? status.queued.map(job).join(", ") : "yo‘q"}`,
+    ...(status.paused && (status.running.length || status.queued.length)
+      ? [
+          "Navbatdagi ishlar boshlanmaydi; bajarilayotgani keyingi qadam oldida to‘xtaydi (joriy qadam tugaydi).",
+        ]
+      : []),
+  ].join("\n");
+}
 
 export async function startRuntime(options: {
   config: ReturnType<typeof loadOrchestratorConfig>;
@@ -75,7 +91,8 @@ export async function startRuntime(options: {
     prefix ? { keyPrefix: `${prefix}:budget:weekly` } : {},
   );
   const checkpointer = PostgresSaver.fromConnString(config.databaseUrl);
-  await checkpointer.setup();
+  // Production runs as a role without DDL rights; the one-shot migrate service creates the tables.
+  if (config.dbAutoMigrate) await checkpointer.setup();
   const telegram = createTelegramNotifier({
     token: config.telegramBotToken,
     chatId: config.telegramChatId,
@@ -93,13 +110,17 @@ export async function startRuntime(options: {
     modelName: config.model,
   });
 
-  // Production: read-only Docker through the socket proxy, host facts and runbooks through the host runner.
+  // Production: read-only Docker through the adapter, host facts and runbooks through the host runner.
   const runnerClient = config.hostRunnerSocket
     ? createRunnerClient({ socketPath: config.hostRunnerSocket })
     : undefined;
   const remote = runnerClient ? createRemoteExecutor(runnerClient) : undefined;
   const childEnv = {
-    ...(config.dockerHost ? { DOCKER_HOST: config.dockerHost } : {}),
+    ...(config.dockerReadAdapterUrl
+      ? { INFRA_DOCKER_ADAPTER_URL: config.dockerReadAdapterUrl }
+      : config.dockerHost
+        ? { DOCKER_HOST: config.dockerHost }
+        : {}),
     ...(config.hostRunnerSocket ? { INFRA_HOST_RUNNER_SOCKET: config.hostRunnerSocket } : {}),
     ...options.childEnv,
   };
@@ -130,14 +151,14 @@ export async function startRuntime(options: {
     query_timeout: 3000,
   });
   const journal = createJournal(pool);
-  await journal.setup();
+  if (config.dbAutoMigrate) await journal.setup();
   const approvals =
-    registry && config.approvalSecret
+    registry && config.approvalSecret && config.callbackSecret
       ? createApprovalStore(pool, config.approvalSecret)
       : undefined;
-  await approvals?.setup();
+  if (config.dbAutoMigrate) await approvals?.setup();
   const flow =
-    approvals && registry && config.approvalSecret
+    approvals && registry && config.approvalSecret && config.callbackSecret
       ? await createActionFlow({
           approvals,
           registry,
@@ -147,7 +168,7 @@ export async function startRuntime(options: {
             : { run: options.actionRunner ?? createSystemRunner(config.actionExecUser ?? "") }),
           redact,
           notifier,
-          callbackSecret: config.approvalSecret,
+          callbackSecret: config.callbackSecret,
         })
       : undefined;
 
@@ -312,13 +333,45 @@ export async function startRuntime(options: {
         redact,
         onError: (error) => log.error("Telegram update failed", { error }),
         controls: {
-          setStopped: controls.setStopped,
+          async setStopped(stopped: boolean) {
+            if (!runnerClient) {
+              await controls.setStopped(stopped);
+              return undefined;
+            }
+            if (stopped) {
+              // Ask the runner even if Redis is unavailable. Work already on the host does not consult Redis.
+              const [investigations, runner] = await Promise.allSettled([
+                controls.setStopped(true),
+                runnerClient.pause(),
+              ]);
+              return [
+                investigations.status === "fulfilled"
+                  ? "Tergovlar to‘xtatildi."
+                  : "Tergovlar: Redis pauzani tasdiqlamadi.",
+                runner.status === "fulfilled"
+                  ? formatRunnerStatus(runner.value)
+                  : "Runner: pauza tasdiqlanmadi. Runner xizmatini qo‘lda to‘xtating.",
+              ].join("\n");
+            }
+            try {
+              const runner = await runnerClient.resume();
+              await controls.setStopped(false);
+              return `Tergovlar davom etmoqda.\n${formatRunnerStatus(runner)}`;
+            } catch (error) {
+              const code = error instanceof RunnerError ? error.code : "xato";
+              return `Davom ettirish tasdiqlanmadi (${code}). Holat uchun /status yuboring.`;
+            }
+          },
           async status() {
             const stopped = await controls.isStopped();
             const paused = (await controls.pausedIncidents()).length;
             const spent = await weeklyBudget.spentUsd(new Date());
+            const runner = runnerClient
+              ? await runnerClient.status().then(formatRunnerStatus, () => "Runner: javob yo‘q")
+              : undefined;
             return (
               `Tergovlar: ${stopped ? "to‘xtatilgan" : "faol"} · pauzada ${paused}\n` +
+              (runner ? `${runner}\n` : "") +
               `Haftalik xarajat: $${spent.toFixed(4)} / $${config.weeklyBudgetUsd.toFixed(2)}`
             );
           },

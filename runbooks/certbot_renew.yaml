@@ -2,9 +2,12 @@ id: certbot_renew
 category: tls
 risk: low
 params: { domain: domains }
+# Before approval only `nginx -t` runs (the host runner also checks that the certificate exists). `renew --dry-run` may
+# use the nginx authenticator, which edits and reloads the live nginx, so it is the FIRST step AFTER approval.
 dry_run:
-  - [certbot, renew, --cert-name, "{domain}", --dry-run, --non-interactive, --no-directory-hooks]
+  - [nginx, -t]
 run:
+  - [certbot, renew, --cert-name, "{domain}", --dry-run, --non-interactive, --no-directory-hooks]
   - [certbot, renew, --cert-name, "{domain}", --non-interactive, --no-directory-hooks]
   - [nginx, -t]
   - [systemctl, reload, nginx]

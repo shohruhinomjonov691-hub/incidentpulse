@@ -673,6 +673,26 @@ export function buildIncidentGraph(deps: GraphDeps) {
               : {}),
             trace: [event("propose", proposal.rejected ? "runbook_rejected" : "no_runbook")],
           };
+        // The canonical plan is fixed here, before the human sees anything: project, runbook, normalized
+        // parameters and the host policy digest. The approval row stores it and the executor re-checks it.
+        let plan: Awaited<ReturnType<typeof actions.flow.plan>>;
+        try {
+          plan = await actions.flow.plan(proposal.book, state.project);
+        } catch (error) {
+          const code = (error as { code?: unknown }).code;
+          return {
+            actionFailure: "remediation" as const,
+            costUsd: proposalCost,
+            weeklySpentUsd: total,
+            trace: [
+              event("propose", "plan_failed", {
+                output: deps
+                  .redact(typeof code === "string" ? code : "plan unavailable")
+                  .slice(0, 200),
+              }),
+            ],
+          };
+        }
         const result = await actions.flow.dryRun(proposal.book, state.project);
         if (!result.ok)
           return {
@@ -690,6 +710,9 @@ export function buildIncidentGraph(deps: GraphDeps) {
           params: proposal.book.params,
           risk: proposal.book.risk,
           dryRunOutput: result.output,
+          planDigest: plan.planDigest,
+          policyDigest: plan.policyDigest,
+          planSummary: plan.summary,
           details: deps
             .redact(state.evidence.map((e) => `[${e.id}] ${e.excerpt}`).join("\n"))
             .slice(0, 2900),

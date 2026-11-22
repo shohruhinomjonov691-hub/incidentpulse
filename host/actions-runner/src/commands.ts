@@ -24,8 +24,14 @@ export interface ResolvedRunbook {
   risk: "low" | "medium";
   dryRun: Step[];
   run: Step[];
-  /** certbot_nginx_issue: the vhost must exist and a certificate must be missing. */
-  prerequisite?: "vhost_present_certificate_missing";
+  /** Defaults to step zero. Set when the run opens with a read-only command. */
+  firstMutationStep?: number;
+  /**
+   * Static pre-approval checks done by the runner (no certbot staging run, nothing touches the live nginx):
+   *  - certbot_nginx_issue: the vhost exists, DNS A points at this server, the certificate is missing or stale.
+   *  - certbot_renew: a certificate for the domain exists.
+   */
+  prerequisite?: "vhost_dns_certificate_missing_or_stale" | "certificate_present";
   /** nginx_site_proxy: the upstream is verified against the project's pm2 apps before anything runs. */
   upstream?: { host: "127.0.0.1"; port: number };
   domain?: string;
@@ -93,8 +99,12 @@ export function resolveRunbook(
         runbookId: id,
         risk: "low",
         domain,
-        dryRun: [sudoStep("certbot", renew("--dry-run"), CERTBOT_TIMEOUT_MS)],
+        prerequisite: "certificate_present",
+        // Pre-approval is static. `certbot renew --dry-run` may use the nginx authenticator, which edits and
+        // reloads the live nginx, so it runs only AFTER approval, as the first step of the run.
+        dryRun: [sudoStep("nginx", ["-t"])],
         run: [
+          sudoStep("certbot", renew("--dry-run"), CERTBOT_TIMEOUT_MS),
           sudoStep("certbot", renew(), CERTBOT_TIMEOUT_MS),
           sudoStep("nginx", ["-t"]),
           sudoStep("systemctl", ["reload", "nginx"]),
@@ -109,8 +119,12 @@ export function resolveRunbook(
         runbookId: id,
         risk: "medium",
         domain,
-        prerequisite: "vhost_present_certificate_missing",
-        dryRun: [
+        prerequisite: "vhost_dns_certificate_missing_or_stale",
+        // Pre-approval is static (the runner checks vhost, DNS and certificate inventory). The staging run
+        // `certonly --dry-run --nginx` temporarily edits and reloads the LIVE nginx, so it is the FIRST step
+        // after approval; a failure stops the run before the real issuance.
+        dryRun: [sudoStep("nginx", ["-t"])],
+        run: [
           sudoStep(
             "certbot",
             // Same authenticator as the real run: a pre-existing vhost has no ACME webroot location.
@@ -123,8 +137,6 @@ export function resolveRunbook(
             ],
             CERTBOT_TIMEOUT_MS,
           ),
-        ],
-        run: [
           sudoStep(
             "certbot",
             ["--nginx", ...domainArgs(domain, project), "--non-interactive", "--redirect"],
@@ -142,6 +154,7 @@ export function resolveRunbook(
         risk: "low",
         dryRun: [sudoStep("nginx", ["-t"])],
         run: [sudoStep("nginx", ["-t"]), sudoStep("systemctl", ["reload", "nginx"])],
+        firstMutationStep: 1,
       };
     }
     case "docker_restart": {

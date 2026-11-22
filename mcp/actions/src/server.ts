@@ -5,6 +5,7 @@ import { ProjectIdSchema } from "@incidentpulse/schemas";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ApprovalStore, ExecutionResult } from "./approvals.ts";
+import { localPlan } from "./plan.ts";
 import type { ActionProgram, ActionStep, ResolvedRunbook, RunbookRegistry } from "./registry.ts";
 import { RunbookChoiceSchema } from "./registry.ts";
 import type { RemoteExecutor } from "./remote.ts";
@@ -75,6 +76,8 @@ export const ExecutionRequestSchema = RunbookChoiceSchema.extend({
   incidentId: z.string().min(1).max(150),
   project: ProjectIdSchema,
   approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  /** sha256 of the canonical plan the human approved; the runner recomputes it from its own policy. */
+  planDigest: z.string().regex(/^[0-9a-f]{64}$/),
   /** Epoch ms the token expires; required to execute through the host runner, which re-verifies it. */
   tokenExpiresAt: z.number().int().positive().optional(),
 });
@@ -137,6 +140,11 @@ export function createActionsServer(options: {
       }
       if (remote && !request.tokenExpiresAt) {
         return reply({ ok: false, output: "Token expiry is required for the host runner" });
+      }
+      // Local executor: recompute the plan from the resolved commands. (The host runner does the same from
+      // its own policy and refuses a different digest.)
+      if (!remote && localPlan(request.project, book).planDigest !== request.planDigest) {
+        return reply({ ok: false, output: "Plan digest mismatch: a new approval is required" });
       }
       if (!(await approvals.claim(request))) {
         return reply({ ok: false, output: "Approval token is invalid, expired or already used" });

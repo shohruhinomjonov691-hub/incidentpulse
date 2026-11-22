@@ -5,7 +5,9 @@ function mockBot() {
   const enqueue = vi.fn(async () => {});
   const reply = vi.fn();
   const decide = vi.fn(async () => ({ answer: "OK" }));
-  const setStopped = vi.fn(async () => {});
+  const setStopped = vi.fn(async (stopped: boolean) =>
+    stopped ? "Runner: pauzada\nBajarilmoqda: pm2_restart\nNavbatda: nginx_reload" : "Runner: faol",
+  );
   const bot = createInvestigationBot({
     token: "123:fake-token",
     chatId: "-100",
@@ -32,8 +34,8 @@ function mockBot() {
     allows_users_to_create_topics: false,
     can_manage_bots: false,
   };
-  bot.api.config.use(async (_previous, method) => {
-    if (method === "sendMessage") reply();
+  bot.api.config.use(async (_previous, method, payload) => {
+    if (method === "sendMessage") reply(payload);
     else if (method !== "answerCallbackQuery")
       throw new Error(`Unexpected Telegram API method: ${method}`);
     return { ok: true, result: {} } as never;
@@ -98,6 +100,11 @@ test("callback decisions and kill-switch commands require both the allowed sende
   await f.callback(42, -100);
   expect(f.decide).toHaveBeenCalledExactlyOnceWith("signed-approval", 42);
   await f.message(42, -100, "", "/stop");
+  expect(f.reply).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      text: expect.stringContaining("Bajarilmoqda: pm2_restart\nNavbatda: nginx_reload"),
+    }),
+  );
   await f.message(42, -100, "", "/resume");
   expect(f.setStopped.mock.calls).toEqual([[true], [false]]);
 });

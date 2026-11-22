@@ -1,6 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { KNOWN_PRICING, type ModelPricing } from "@incidentpulse/config";
-import { createApprovalStore, dryRun, loadRunbookRegistry } from "@incidentpulse/mcp-actions";
+import {
+  createApprovalStore,
+  dryRun,
+  loadRunbookRegistry,
+  localPlan,
+  type RemoteExecutor,
+} from "@incidentpulse/mcp-actions";
+import { createRedactor } from "@incidentpulse/redact";
 import { Redis } from "ioredis";
 import { Pool } from "pg";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -96,9 +103,7 @@ test("TLS mismatch can propose medium-risk issuance only after the inventory dry
 
   const missing = vi.fn(async () => "");
   expect((await dryRun(book, missing, m.deps.redact)).ok).toBe(true);
-  expect(missing.mock.calls[2]).toMatchObject([
-    { program: "certbot", args: expect.arrayContaining(["certonly", "--dry-run", "kervan.uz"]) },
-  ]);
+  expect(missing.mock.calls[2]).toMatchObject([{ program: "nginx", args: ["-t"] }]);
 });
 
 const databaseUrl = process.env.IT_DATABASE_URL;
@@ -108,7 +113,9 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
 
-async function fixture() {
+const testOutputSecret = "plain-output-value-that-must-not-persist";
+
+async function fixture(remote?: RemoteExecutor) {
   const suffix = randomBytes(6).toString("hex");
   const schema = `it_phase${suffix}`;
   const admin = new Pool({ connectionString: databaseUrl });
@@ -155,7 +162,8 @@ async function fixture() {
     registry,
     controls,
     run: runner,
-    redact: m.deps.redact,
+    ...(remote ? { remote } : {}),
+    redact: remote ? createRedactor({ secrets: [testOutputSecret] }) : m.deps.redact,
     notifier: notify,
     callbackSecret: secret,
   });
@@ -199,6 +207,9 @@ describe.skipIf(!databaseUrl || !redisUrl)(
       const first = await runIncident(f.graph, job());
       expect(first.mode).toBe("waiting");
       expect(first.state.approval?.status).toBe("pending");
+      expect(f.m.notifier.sent[0]).toMatch(
+        /project: kervan\nrunbook: docker_restart\nservice: toy-app/,
+      );
       expect(f.runner).toHaveBeenCalledOnce();
       expect(f.runner.mock.calls[0]).toMatchObject([
         { program: "docker", args: expect.arrayContaining(["inspect", "toy-app"]) },
@@ -225,6 +236,29 @@ describe.skipIf(!databaseUrl || !redisUrl)(
         { event: "execution_claimed", actor: "42" },
         { event: "execution_finished", actor: "actions" },
       ]);
+    });
+
+    test("redacts remote output before it is shortened and persisted", async () => {
+      const f = await fixture({
+        plan: async (project, book) => localPlan(project, book),
+        dryRun: async () => ({ ok: true, output: `${" ".repeat(1990)}${testOutputSecret}` }),
+        execute: async () => ({ ok: true, output: `${"x".repeat(3990)} ${testOutputSecret}` }),
+      });
+      const { state } = await runIncident(f.graph, job());
+      const id = state.approvalId as string;
+      expect((await f.approvals.get(id))?.dryRunOutput).toBe("[REDACTED]");
+      await f.flow.callback(f.buttons[0] as string, 42);
+      const approved = await f.approvals.get(id);
+      if (!approved) throw new Error("Missing approval");
+      await f.flow.execute(approved);
+      const output = (await f.approvals.get(id))?.execution?.output ?? "";
+      expect(output).toHaveLength(4000);
+      expect(output).toContain("[REDACTED");
+      expect(output).not.toContain("plain-out");
+      const audit = await f.pool.query<{ detail: { output: string } }>(
+        "SELECT detail FROM incidentpulse_action_audit WHERE event='execution_finished'",
+      );
+      expect(audit.rows[0]?.detail.output).toBe(output);
     });
 
     test.each(["rejected", "expired"] as const)("%s cannot execute a runbook", async (status) => {
@@ -283,6 +317,7 @@ describe.skipIf(!databaseUrl || !redisUrl)(
         runbookId: approval.runbookId,
         params: approval.params,
         approvalToken: token,
+        planDigest: approval.planDigest as string,
       };
       expect(await f.approvals.claim({ ...request, params: { service: "different" } })).toBe(false);
       f.advance(14);
@@ -306,6 +341,7 @@ describe.skipIf(!databaseUrl || !redisUrl)(
           runbookId: approval.runbookId,
           params: approval.params,
           approvalToken: token,
+          planDigest: approval.planDigest as string,
         }),
       ).toBe(false);
     });

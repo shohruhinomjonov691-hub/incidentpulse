@@ -10,7 +10,8 @@ export function createInvestigationBot(options: {
   redact: Redactor;
   onError(error: string): void;
   controls?: {
-    setStopped(stopped: boolean): Promise<void>;
+    /** May supply the reply when runner status is available. */
+    setStopped(stopped: boolean): Promise<string | undefined>;
     status(): Promise<string>;
     callback(
       data: string,
@@ -38,8 +39,9 @@ export function createInvestigationBot(options: {
     for (const command of ["stop", "resume"] as const) {
       bot.command(command, async (ctx) => {
         if (!authorized(ctx)) return;
-        await controls.setStopped(command === "stop");
-        await ctx.reply(command === "stop" ? "Tergovlar to‘xtatildi." : "Tergovlar davom etmoqda.");
+        const reply = await controls.setStopped(command === "stop");
+        const base = command === "stop" ? "Tergovlar to‘xtatildi." : "Tergovlar davom etmoqda.";
+        await ctx.reply(reply ?? base);
       });
     }
     bot.command("status", async (ctx) => {

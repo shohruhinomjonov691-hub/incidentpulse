@@ -48,6 +48,24 @@ export function createJournal(pool: Pool) {
           created_at timestamptz NOT NULL DEFAULT now(), attempted_at timestamptz,
           markdown text, micro integer NOT NULL DEFAULT 0
         );
+        CREATE OR REPLACE FUNCTION incidentpulse_take_question(incident text)
+        RETURNS boolean LANGUAGE sql AS $fn$
+          WITH accepted AS (
+            UPDATE incidentpulse_incidents SET questions=questions+1
+            WHERE id=incident AND questions<10 AND state IS NOT NULL RETURNING id
+          )
+          SELECT EXISTS (SELECT 1 FROM accepted);
+        $fn$;
+        CREATE OR REPLACE FUNCTION incidentpulse_charge_question(incident text, micro integer)
+        RETURNS void LANGUAGE sql AS $fn$
+          WITH charged AS (
+            UPDATE incidentpulse_incidents SET chat_micro=chat_micro+micro
+            WHERE id=incident AND state IS NOT NULL AND questions>0 AND micro>=0 RETURNING id
+          )
+          INSERT INTO incidentpulse_events(incident_id,kind,at,data)
+          SELECT id,'chat_cost',now(),jsonb_build_object('costUsd',micro / 1000000.0)
+          FROM charged;
+        $fn$;
       `);
     },
     async append(input: {
@@ -154,18 +172,14 @@ export function createJournal(pool: Pool) {
       );
     },
     async takeQuestion(id: string) {
-      const result = await pool.query(
-        `UPDATE incidentpulse_incidents SET questions=questions+1
-        WHERE id=$1 AND questions<10 AND state IS NOT NULL`,
+      const result = await pool.query<{ accepted: boolean }>(
+        "SELECT incidentpulse_take_question($1) AS accepted",
         [id],
       );
-      return result.rowCount === 1;
+      return result.rows[0]?.accepted === true;
     },
     async chargeQuestion(id: string, micro: number) {
-      await pool.query("UPDATE incidentpulse_incidents SET chat_micro=chat_micro+$2 WHERE id=$1", [
-        id,
-        micro,
-      ]);
+      await pool.query("SELECT incidentpulse_charge_question($1,$2)", [id, micro]);
     },
   };
 }
