@@ -61,6 +61,16 @@ const EnvSchema = z.object({
   HEALTH_POLL_ENABLED: z.enum(["true", "false"]).default("false"),
   /** Project id -> full URLs to poll; default: https://<domain>/ for each PROJECT_DOMAINS_JSON entry. */
   HEALTH_POLL_URLS_JSON: z.string().optional(),
+  /**
+   * LLM-free deep health: per project the API URLs to GET and the statuses that count as healthy, e.g.
+   * {"kervan":{"api":["https://kervan.uz:8443/<endpoint>"],"expect":[200,401]}}. Empty = mixed-content check only.
+   */
+  HEALTH_DEEP_JSON: z.string().optional(),
+  /** Minutes between deep checks (the plain poll stays at 15). 0 turns the deep check off. */
+  HEALTH_DEEP_INTERVAL_MIN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(0).max(1440).default(60),
+  ),
   INVESTIGATE_MODE: z.enum(["on_change", "weekly"]).default("on_change"),
   TELEGRAM_ALLOWED_USER_IDS: z
     .string()
@@ -211,6 +221,54 @@ export function resolveHealthTargets(
   return targets;
 }
 
+export interface DeepApiTarget {
+  api: string[];
+  /** HTTP statuses that count as healthy. */
+  expect: number[];
+}
+
+/**
+ * HEALTH_DEEP_JSON. An API URL must stay inside its project's domains (host or subdomain, any port:
+ * `kervan.uz:8443` is fine for `kervan.uz`), because the deep check is an SSRF surface otherwise.
+ * An invalid entry stops the start; error messages name the project, never the URL.
+ */
+export function resolveHealthDeep(
+  json: string | undefined,
+  domains: Record<ProjectId, string[]>,
+): Partial<Record<ProjectId, DeepApiTarget>> {
+  if (!json) return {};
+  const parsed = z
+    .partialRecord(
+      ProjectIdSchema,
+      z.strictObject({
+        api: z.array(z.string().min(1).max(2048)).max(10),
+        expect: z.array(z.number().int().min(100).max(599)).min(1).max(20).optional(),
+      }),
+    )
+    .safeParse(parseJson("HEALTH_DEEP_JSON", json));
+  if (!parsed.success) throw new ConfigError(["HEALTH_DEEP_JSON: wrong shape"]);
+  const targets: Partial<Record<ProjectId, DeepApiTarget>> = {};
+  for (const [project, entry] of Object.entries(parsed.data) as Array<
+    [ProjectId, { api: string[]; expect?: number[] }]
+  >) {
+    const allowed = domains[project].map(hostOf);
+    for (const raw of entry.api) {
+      let url: URL;
+      try {
+        url = new URL(raw);
+      } catch {
+        throw new ConfigError([`HEALTH_DEEP_JSON: invalid API URL for ${project}`]);
+      }
+      const inside = allowed.some((d) => url.hostname === d || url.hostname.endsWith(`.${d}`));
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password || !inside) {
+        throw new ConfigError([`HEALTH_DEEP_JSON: ${project} API URL is outside its domains`]);
+      }
+    }
+    targets[project] = { api: entry.api, expect: entry.expect ?? [200] };
+  }
+  return targets;
+}
+
 /** A JSON object of string -> string (project id -> CodeTrail id / "owner/repo"). */
 export function resolveStringMap(name: string, json?: string): Record<string, string> | undefined {
   if (!json) return undefined;
@@ -301,6 +359,8 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
     "PROJECT_PM2_JSON",
     "HEALTH_POLL_ENABLED",
     "HEALTH_POLL_URLS_JSON",
+    "HEALTH_DEEP_JSON",
+    "HEALTH_DEEP_INTERVAL_MIN",
     "INVESTIGATE_MODE",
     "TELEGRAM_ALLOWED_USER_IDS",
     "PROJECT_DOMAINS_JSON",
@@ -357,6 +417,13 @@ export function loadOrchestratorConfig(source: NodeJS.ProcessEnv = process.env) 
         c.HEALTH_POLL_ENABLED === "true"
           ? resolveHealthTargets(c.HEALTH_POLL_URLS_JSON, projectDomains)
           : {},
+      deep: {
+        intervalMinutes: c.HEALTH_DEEP_INTERVAL_MIN,
+        apis:
+          c.HEALTH_POLL_ENABLED === "true"
+            ? resolveHealthDeep(c.HEALTH_DEEP_JSON, projectDomains)
+            : {},
+      },
     },
     approvalSecret: c.APPROVAL_HMAC_SECRET,
     actionScopes: Object.fromEntries(

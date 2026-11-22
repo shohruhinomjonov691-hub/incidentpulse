@@ -26,6 +26,7 @@ import { createSynthesizer } from "./agents/synthesizer.ts";
 import { createTriage } from "./agents/triage.ts";
 import { createContinuations } from "./continuations.ts";
 import { createDebateVerifier } from "./debate.ts";
+import { createDeepChecker } from "./deep-health.ts";
 import { buildIncidentGraph } from "./graph.ts";
 import { createHealthPoller } from "./health-poller.ts";
 import { createHostInventory } from "./host-inventory.ts";
@@ -217,6 +218,14 @@ export async function startRuntime(options: {
         redact,
         log,
         monitor: investigations.monitor,
+        ...(config.healthPoll.deep.intervalMinutes > 0
+          ? {
+              deep: createDeepChecker({
+                allowedHosts: config.projectDomains,
+                apis: config.healthPoll.deep.apis,
+              }),
+            }
+          : {}),
         ...(prefix ? { prefix: `${prefix}:health` } : {}),
       })
     : undefined;
@@ -235,6 +244,7 @@ export async function startRuntime(options: {
     log,
     onResume: continuations.resume,
     ...(healthPoller ? { healthPoller } : {}),
+    healthDeepEveryMinutes: config.healthPoll.deep.intervalMinutes,
     ...(prefix ? { queueName: prefix } : {}),
   });
 
@@ -330,6 +340,11 @@ export async function startRuntime(options: {
     actionsEnabled: config.actionsEnabled,
     hostRunner: Boolean(runnerClient),
     healthPoll: config.healthPoll.enabled,
+    healthDeepEveryMinutes: config.healthPoll.enabled ? config.healthPoll.deep.intervalMinutes : 0,
+    healthDeepApis: Object.values(config.healthPoll.deep.apis).reduce(
+      (n, t) => n + t.api.length,
+      0,
+    ),
   });
 
   return {

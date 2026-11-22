@@ -173,6 +173,8 @@ PROJECT_CONTAINERS_JSON='{"codetrail":["codetrail"],"food-lens":["food-lens"],"f
 PROJECT_PM2_JSON='{"kervan":["KERVAN","KERVAN-REACT"]}'
 PROJECT_ACTION_SCOPES_JSON='{"kervan":{"pm2":["KERVAN","KERVAN-REACT"],"nginx":true,"webroot":"/var/www/html","www":false}}'
 HEALTH_POLL_URLS_JSON=
+HEALTH_DEEP_JSON=
+HEALTH_DEEP_INTERVAL_MIN=60
 EOF
 ```
 
@@ -185,10 +187,19 @@ Nima nimani cheklaydi:
 | `PROJECT_PM2_JSON` | `pm2_list`, `pm2_logs`, `pm2_ports` ko'ra oladigan PM2 ilovalari: faqat `KERVAN`, `KERVAN-REACT`. |
 | `PROJECT_ACTION_SCOPES_JSON` | Tasdiq bilan **o'zgartirish** mumkin bo'lgan narsa. Birinchi chiqarishda **faqat Kervan**: PM2 restart, nginx reload, `certbot_*`, `nginx_site_proxy`. Boshqa loyihalar faqat o'qiladi (qo'shish uchun bu yerga va 6.3 policy'ga aniq nomlarini yozing). **`www:false`** (policy, scope va 12-bo'lim bir xil): `www.kervan.uz` DNS'da ham, nginx `server_name` da ham yo'q, shuning uchun sertifikat faqat `-d kervan.uz` uchun. `www:true` qo'yilsa `www.kervan.uz` ham so'raladi va Let's Encrypt DNS'siz rad etadi. `nginx_site_proxy` Kervan uchun scope'da ruxsat etilgan, lekin Kervan vhost'i allaqachon bor: u **taklif qilinmaydi** va runner hamda root yordamchi `nginx -T` da `server_name` borligini ko'rsa qat'iy rad etadi (ikkinchi blok yaratilmaydi). |
 | `HEALTH_POLL_URLS_JSON` | Bo'sh = `https://<domen>/`. Aniq health URL kerak bo'lsa: `'{"gotrip":["https://<domen>/api/health"]}'` (URL host'i loyiha domenlari ichida bo'lishi shart, aks holda start bo'lmaydi). |
+| `HEALTH_DEEP_JSON` | Ixtiyoriy. Bo'sh = faqat mixed content tekshiruvi. API tekshiruvi uchun namuna: `'{"kervan":{"api":["https://kervan.uz:8443/<endpoint>"],"expect":[200,401]}}'`. `expect` yozilmasa `[200]`. API URL'ning **hostnomi loyiha domenlari ichida** bo'lishi shart (`kervan.uz:8443` mumkin, `evil.example` yoki `169.254.169.254` mumkin emas), aks holda **start bo'lmaydi** (xato loyiha nomini aytadi, URL'ni emas). |
+| `HEALTH_DEEP_INTERVAL_MIN` | Deep tekshiruv oralig'i, daqiqada (default `60`; oddiy poll 15 da qoladi). `0` = deep o'chiq. |
 
 `webroot` (`/var/www/html`) faqat `nginx_site_proxy` yaratadigan **yangi** vhost'larning `/.well-known/acme-challenge/` joyi uchun ishlatiladi (Ubuntu'da nginx default papkasi shu; tekshirish: `ls -ld /var/www/html`). Kervan sertifikati webroot'ga bog'liq emas: `certbot_nginx_issue` ham dry-run'da, ham real ishda nginx autentifikatoridan foydalanadi.
 
 Poller qoidasi: URL `5xx`, ulanish xatosi yoki TLS xatosi bersa va 10 soniyadan keyin qayta tekshiruv ham xato bersa **Down**. `4xx` (masalan 401/404) ilovaning javobi, nosozlik emas. Tergov faqat holat **o'zgarganda** boshlanadi (ok→down, down→ok yoki birinchi ko'rishda down). O'sha holatda qolgan loyiha token ham, xabar ham sarflamaydi.
+
+**Deep health** (LLM'siz, `$0`, har `HEALTH_DEEP_INTERVAL_MIN` daqiqada, shuningdek orchestrator ishga tushganda va **Down loyiha qaytganda darhol**): sahifa `200` bergan, lekin ishlamasligi mumkin bo'lgan holatni qidiradi. Natija **Degraded** (Down emas):
+
+- **`mixed_content`**: bosh sahifa HTML'idagi `<script src>`, `<link href>`, `<img src>` ichida `http://`; shuningdek loyihaning o'z JS bundle'lari (har biri ≤ 5 MB, hammasi ≤ 10 MB, ko'pi bilan 20 ta, 15 s timeout; begona CDN skriptlari yuklanmaydi) ichida loyiha domenlari yoki server IP'siga yo'naltirilgan `http://...` va `ws://...`. W3C namespace'lari va begona hostlar e'tiborga olinmaydi. Bu **qator qidiruvi**: bundle ichidagi `http://kervan.uz/...` matni (masalan oddiy havola) ham topiladi, hatto so'rov yuborilmasa ham.
+- **`api_down`**: `HEALTH_DEEP_JSON` dagi URL kutilgan statuslar ro'yxatida emas yoki ulanish xatosi (10 soniyadan keyin qayta tekshiruvdan so'ng).
+
+Runbook yo'q, shuning uchun Degraded **hech qachon** tuzatish taklif qilmaydi: Telegram'ga LLM'siz qisqa xabar boradi (qaysi URL, qaysi fayl), tergov ochilmaydi. Xabar faqat o'zgarganda (yangi Degraded, yangi dalil, tiklanish) yuboriladi; o'zgarmagan Degraded kuniga (Seoul) ko'pi bilan **1 eslatma** beradi.
 
 Byudjet: tergov boshiga `$0.50`, **haftasiga $0.50** (Dushanba 00:00 Asia/Seoul), xulosa keshi **7 kun**. Poller LLM'ni ishlatmaydi.
 
@@ -375,7 +386,7 @@ $COMPOSE ps
 $COMPOSE logs --tail 30 orchestrator
 ```
 
-**Kutilgan natija**: `orchestrator ready` qatori (`actionsEnabled: true, hostRunner: true, healthPoll: true`), keyin `health poll finished`.
+**Kutilgan natija**: `orchestrator ready` qatori (`actionsEnabled: true, hostRunner: true, healthPoll: true, healthDeepEveryMinutes: 60`), keyin `health poll finished` va `deep health finished`.
 
 Xotira va portlar:
 
@@ -459,6 +470,43 @@ git pull --ff-only
 export IP_TAG=$(git rev-parse --short HEAD)
 $COMPOSE build && $COMPOSE up -d
 ```
+**Yangilash: deep health (mixed content + API tekshiruvi)**
+
+Bu yangilanish faqat orchestrator kodi va ikkita ixtiyoriy env o'zgaruvchisini qo'shadi. Runner, sudoers va policy **o'zgarmaydi** (6.3/6.4 kerak emas), yangi port ochilmaydi.
+
+```bash
+cd /opt/incidentpulse/app
+git fetch origin && git log --oneline HEAD..origin/main
+git diff --stat HEAD..origin/main -- host/        # bo'sh bo'lishi kerak: runner kodi o'zgarmagan
+git pull --ff-only
+export IP_TAG=$(git rev-parse --short HEAD)
+```
+
+Kervan API manzilini va uning oddiy statusini aniqlang (faqat o'qish; `<main.xxxx.js>` va `<endpoint>` ni o'zingiz topasiz):
+
+```bash
+curl -s https://kervan.uz/ | grep -o 'static/js/main[^"]*\.js'
+curl -s https://kervan.uz/static/js/<main.xxxx.js> | grep -o 'kervan\.uz:8443[^" ]*' | sort -u
+curl -s -o /dev/null -w '%{http_code}\n' https://kervan.uz:8443/<endpoint>      # shu kod (va 401, agar kirish talab qilinsa) "expect" ga
+```
+
+`/opt/incidentpulse/secrets/.env` ga qo'shing (JSON atrofida **bitta tirnoq**; shu nomli qator allaqachon bo'lsa, uni tahrirlang, takrorlamang):
+
+```bash
+cat >> /opt/incidentpulse/secrets/.env <<'EOF'
+HEALTH_DEEP_JSON='{"kervan":{"api":["https://kervan.uz:8443/<endpoint>"],"expect":[200,401]}}'
+HEALTH_DEEP_INTERVAL_MIN=60
+EOF
+$COMPOSE build && $COMPOSE up -d          # faqat orchestrator qayta yaratiladi
+sleep 20 && $COMPOSE logs --tail 20 orchestrator | grep -E 'orchestrator ready|deep health|health poll'
+```
+
+**Kutilgan natija**: `orchestrator ready` da `healthDeepEveryMinutes: 60, healthDeepApis: 1`, so'ng `deep health finished` (`checked: 1, degraded: 0`). Hozir Kervan to'g'ri sozlangan (`https://kervan.uz:8443`), shuning uchun Telegram'ga **hech narsa** kelmasligi kerak. `HEALTH_DEEP_JSON` bo'sh bo'lsa faqat mixed content ishlaydi.
+
+Agar orchestrator `... API URL is outside its domains` bilan yiqilsa: URL hostnomi `PROJECT_DOMAINS_JSON` dagi domen (yoki subdomen) emas; to'g'rilang, aks holda start bo'lmaydi. Sinash uchun (hech narsa o'zgarmaydi): `expect` ga atayin noto'g'ri kod (masalan `[418]`) yozib qayta ishga tushiring: taxminan 20 soniyada `🟠 Kervan — Degraded (api_down)` xabari kelishi kerak; keyin to'g'ri qiymatni qaytaring, `🟢 ... Degraded tugadi` keladi.
+
+O'chirish/qaytarish: `HEALTH_DEEP_INTERVAL_MIN=0` (deep to'liq o'chadi) yoki `HEALTH_DEEP_JSON` ni bo'sh qoldirish (faqat API tekshiruvi o'chadi) va `$COMPOSE up -d`; yoki quyidagi "oldingi versiyaga qaytarish".
+
 Runner kodi o'zgargan bo'lsa (`git diff --stat <eski>..HEAD -- host/`): 6.3 (nusxalash, **eskisini avval saqlang**: `cp -a /opt/incidentpulse/actions-runner /opt/incidentpulse/actions-runner.prev`), 6.4 (sudoers qayta generatsiya), keyin `systemctl restart incidentpulse-actions`.
 
 **Servislarni oldingi versiyaga qaytarish**: eski imijlar diskda qoladi (`IP_TAG` bilan teglangan).

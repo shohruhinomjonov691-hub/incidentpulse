@@ -51,8 +51,48 @@ if (fault === "disk") logDiskFull("/");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Scenarios 15 and 16: the app is a tiny single-page app (an HTML shell, one JS bundle, one API route).
+//   FAULT=spa     healthy: the bundle calls the API over a relative path
+//   FAULT=mixed   15: the bundle calls http://<PUBLIC_HOST>:3003 and ws://... (the page itself is HTTPS)
+//   FAULT=api502  16: the page and the bundle are fine, GET /api/menu answers 502
+const SPA_FAULTS = new Set(["spa", "mixed", "api502"]);
+const publicHost = process.env.PUBLIC_HOST || "localhost";
+
+function serveSpa(req, res) {
+  if (req.url === "/") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      '<!doctype html><html><head><title>toy</title><script src="/static/main.js"></script></head>' +
+        '<body><div id="root">toy ok</div></body></html>\n',
+    );
+    return true;
+  }
+  if (req.url === "/static/main.js") {
+    res.writeHead(200, { "content-type": "application/javascript" });
+    res.end(
+      fault === "mixed"
+        ? `const API = "http://${publicHost}:3003"; const SOCKET = "ws://${publicHost}:3003"; // "http://www.w3.org/2000/svg"\n`
+        : 'const API = "/api"; const SOCKET = "/socket.io"; // "http://www.w3.org/2000/svg"\n',
+    );
+    return true;
+  }
+  if (req.url === "/api/menu") {
+    if (fault === "api502") {
+      console.error(`[${name}] ERROR upstream: menu service unreachable (502)`);
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end('{"error":"bad gateway"}\n');
+    } else {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"dishes":[{"id":1,"name":"plov"}]}\n');
+    }
+    return true;
+  }
+  return false;
+}
+
 http
   .createServer(async (req, res) => {
+    if (SPA_FAULTS.has(fault) && serveSpa(req, res)) return;
     if (fault === "injection") {
       logFault(req.url);
       res.writeHead(500, { "content-type": "text/plain" });

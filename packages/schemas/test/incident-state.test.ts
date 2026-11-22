@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { CONTRACTS, IncidentStateSchema, renderJsonSchema } from "../src/index.ts";
+import {
+  CategorySchema,
+  CONTRACTS,
+  DeepCategorySchema,
+  IncidentStateSchema,
+  renderJsonSchema,
+  TriageCategorySchema,
+} from "../src/index.ts";
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = (relative: string): unknown =>
@@ -69,5 +76,17 @@ describe("generated JSON Schema (consumed by the Python services)", () => {
     const onDisk = readFileSync(join(pkgDir, "json", file), "utf8");
     // If this fails: pnpm --filter @incidentpulse/schemas generate
     expect(onDisk).toBe(renderJsonSchema(schema));
+  });
+});
+
+describe("categories", () => {
+  test("the deep-check categories exist, but an LLM may not choose them", () => {
+    expect(DeepCategorySchema.options).toEqual(["mixed_content", "api_down"]);
+    for (const c of DeepCategorySchema.options) {
+      expect(CategorySchema.options).toContain(c);
+      expect(TriageCategorySchema.options).not.toContain(c);
+    }
+    expect(TriageCategorySchema.options).toContain("unknown");
+    expect(TriageCategorySchema.options).toHaveLength(CategorySchema.options.length - 2);
   });
 });

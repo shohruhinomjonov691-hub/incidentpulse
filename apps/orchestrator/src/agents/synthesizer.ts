@@ -2,10 +2,10 @@ import type { ModelPricing } from "@incidentpulse/config";
 import type { Redactor } from "@incidentpulse/redact";
 import {
   type Category,
-  CategorySchema,
   type Evidence,
   type Hypothesis,
   HypothesisSchema,
+  TriageCategorySchema,
 } from "@incidentpulse/schemas";
 import {
   Agent,
@@ -27,7 +27,7 @@ import { WeeklyBudgetExhausted } from "./sdk.ts";
  * strict structured outputs reject some of them; ranges are enforced by the output guardrail.
  */
 export const LlmSynthesisSchema = z.object({
-  category: z.enum(CategorySchema.options),
+  category: z.enum(TriageCategorySchema.options),
   hypotheses: z.array(
     z.object({
       cause: z.string(),

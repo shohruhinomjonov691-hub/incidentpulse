@@ -1,7 +1,7 @@
 import type { ModelPricing } from "@incidentpulse/config";
 import type { ResolvedRunbook, RunbookRegistry } from "@incidentpulse/mcp-actions";
 import type { Redactor } from "@incidentpulse/redact";
-import { RunbookIdSchema } from "@incidentpulse/schemas";
+import { DeepCategorySchema, RunbookIdSchema } from "@incidentpulse/schemas";
 import {
   Agent,
   type Model,
@@ -33,6 +33,11 @@ export function createRemediationProposer(options: {
   return async (
     state: GraphState,
   ): Promise<{ book?: ResolvedRunbook; costUsd: number; rejected?: boolean }> => {
+    // Deep-check categories have no runbook, ever: they always escalate to a human. (With a host
+    // inventory the web runbooks follow host facts, not the category, so this must be explicit.)
+    if (state.category && DeepCategorySchema.safeParse(state.category).success) {
+      return { costUsd: 0 };
+    }
     const top =
       state.hypotheses.find((h) => h.id === state.verdict?.hypothesisId) ?? state.hypotheses[0];
     if (

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { type HttpProbeResult, httpProbe } from "@incidentpulse/mcp-infra";
 import type { Redactor } from "@incidentpulse/redact";
 import {
@@ -9,13 +9,25 @@ import {
 } from "@incidentpulse/schemas";
 import type { Notifier } from "@incidentpulse/telegram-bot";
 import type { Redis } from "ioredis";
+import type { DeepResult } from "./deep-health.ts";
 import type { Logger } from "./log.ts";
+import { formatDegraded, formatDegradedRecovered } from "./report.ts";
+import { dayKey } from "./weekly-budget.ts";
 
 export const HEALTH_POLL_JOB = "health-poll";
 export const HEALTH_POLL_SCHEDULER = "health-poll-every-15-minutes";
 export const HEALTH_POLL_EVERY_MINUTES = 15;
 /** The `check` name on the signals the poller raises. */
 export const HEALTH_POLL_CHECK = "health_poll";
+export const HEALTH_DEEP_JOB = "health-deep";
+export const HEALTH_DEEP_SCHEDULER = "health-deep-scheduler";
+
+/** Down: nothing usable answers. Degraded: the page answers 200 but a deep check fails. */
+export type HealthLevel = "ok" | "degraded" | "down";
+
+export function effectiveLevel(shallow: "ok" | "down", deep: "ok" | "degraded"): HealthLevel {
+  return shallow === "down" ? "down" : deep === "degraded" ? "degraded" : "ok";
+}
 
 export interface HealthPollerOptions {
   redis: Redis;
@@ -38,12 +50,24 @@ export interface HealthPollerOptions {
   timeoutMs?: number;
   /** A failing check is repeated once after this delay before the project is called Down. */
   confirmDelayMs?: number;
+  /** LLM-free deep checks (mixed content, API). Without it `runDeep` does nothing. */
+  deep?: { check(project: ProjectId, urls: string[]): Promise<DeepResult> };
 }
 
 interface ProjectState {
   level: "ok" | "down";
   since: string;
   checkedAt: string;
+}
+
+interface DeepState {
+  level: "ok" | "degraded";
+  since: string;
+  checkedAt: string;
+  /** Hash of the findings: a change means new evidence and a new message. */
+  fingerprint?: string;
+  /** Seoul day of the last message: an unchanged Degraded repeats at most once per day. */
+  notifiedDay?: string;
 }
 
 /** Down when nothing answers, TLS fails, or the server answers 5xx. 4xx is the app talking: not an outage. */
@@ -67,6 +91,7 @@ export function createHealthPoller(options: HealthPollerOptions) {
   const timeoutMs = options.timeoutMs ?? 10_000;
   const confirmDelayMs = options.confirmDelayMs ?? 10_000;
   const stateKey = `${options.prefix ?? "incidentpulse:health"}:state`;
+  const deepKey = `${options.prefix ?? "incidentpulse:health"}:deep`;
 
   async function lookAt(project: ProjectId, urls: string[]): Promise<string[]> {
     const failures: string[] = [];
@@ -98,7 +123,93 @@ export function createHealthPoller(options: HealthPollerOptions) {
     }
   }
 
+  async function loadDeep(project: ProjectId): Promise<DeepState | undefined> {
+    const raw = await redis.hget(deepKey, project);
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as DeepState;
+      return parsed.level === "ok" || parsed.level === "degraded" ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * One deep look at one project. Findings -> Degraded (a message on a change, a reminder at most once
+   * per Seoul day while unchanged). No findings -> ok, with a recovery message if it was Degraded. If
+   * something could not be examined, nothing is concluded. Never calls an LLM and never proposes a fix.
+   */
+  async function deepCheck(project: ProjectId, urls: string[]): Promise<HealthLevel | undefined> {
+    if (!options.deep) return undefined;
+    const result = await options.deep.check(project, urls);
+    for (const note of result.notes) options.log?.info("deep health note", { project, note });
+    const previous = await loadDeep(project);
+    const at = now();
+    if (result.findings.length === 0) {
+      if (!result.complete) return previous?.level;
+      if (previous?.level === "degraded") {
+        await notifier.send(formatDegradedRecovered(project));
+      }
+      const state: DeepState = {
+        level: "ok",
+        since: previous?.level === "ok" ? previous.since : at.toISOString(),
+        checkedAt: at.toISOString(),
+      };
+      await redis.hset(deepKey, project, JSON.stringify(state));
+      return "ok";
+    }
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify(
+          result.findings.map((f) => [f.category, f.url, f.file ?? "", f.detail ?? ""]).sort(),
+        ),
+      )
+      .digest("hex");
+    const changed = previous?.level !== "degraded" || previous.fingerprint !== fingerprint;
+    const today = dayKey(at);
+    let notifiedDay = previous?.notifiedDay;
+    if (changed || notifiedDay !== today) {
+      await notifier.send(
+        redact(formatDegraded({ project, findings: result.findings, reminder: !changed })),
+      );
+      notifiedDay = today;
+    }
+    const state: DeepState = {
+      level: "degraded",
+      since: previous?.level === "degraded" ? previous.since : at.toISOString(),
+      checkedAt: at.toISOString(),
+      fingerprint,
+      ...(notifiedDay ? { notifiedDay } : {}),
+    };
+    await redis.hset(deepKey, project, JSON.stringify(state));
+    return "degraded";
+  }
+
   return {
+    /** Deep checks for every project that is not Down. Runs on its own (slower) schedule. */
+    async runDeep() {
+      const levels: Array<{ project: ProjectId; level: HealthLevel }> = [];
+      for (const [project, urls] of Object.entries(options.targets) as Array<
+        [ProjectId, string[]]
+      >) {
+        if (urls.length === 0 || !options.deep) continue;
+        try {
+          // A project that is Down is the plain poller's business: its page cannot be examined anyway.
+          if ((await load(project))?.level === "down") continue;
+          const level = await deepCheck(project, urls);
+          if (level) levels.push({ project, level });
+        } catch (error) {
+          options.log?.error("deep health failed for a project", {
+            project,
+            error: error instanceof Error ? redact(error.message) : "unknown",
+          });
+        }
+      }
+      const degraded = levels.filter((l) => l.level === "degraded").length;
+      options.log?.info("deep health finished", { checked: levels.length, degraded });
+      return { checked: levels.length, degraded, levels };
+    },
+
     async run() {
       const changes: Array<{ project: ProjectId; level: "ok" | "down"; outcome: string }> = [];
       let checked = 0;
@@ -133,6 +244,16 @@ export function createHealthPoller(options: HealthPollerOptions) {
               await notifier.send(
                 `🟢 ${PROJECT_DISPLAY_NAMES[project]} — qayta ishlayapti (health poll).`,
               );
+              // A page that just came back is exactly when a hidden second fault shows (case study:
+              // TLS fixed, then mixed content): look deeper now instead of waiting for the next hour.
+              try {
+                await deepCheck(project, urls);
+              } catch (error) {
+                options.log?.error("deep health after recovery failed", {
+                  project,
+                  error: error instanceof Error ? redact(error.message) : "unknown",
+                });
+              }
             }
           }
           const state: ProjectState = {

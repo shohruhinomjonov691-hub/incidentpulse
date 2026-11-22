@@ -26,6 +26,12 @@ export const RunbookIdSchema = z.enum([
   "nginx_site_proxy",
 ]);
 
+/**
+ * Raised only by the LLM-free deep health check (the page answers 200, but is unusable). No runbook
+ * exists for them, so they always end in a human escalation; the triage agent never picks them.
+ */
+export const DeepCategorySchema = z.enum(["mixed_content", "api_down"]);
+
 export const CategorySchema = z.enum([
   "tls",
   "dns",
@@ -34,8 +40,12 @@ export const CategorySchema = z.enum([
   "container_down",
   "deploy_regression",
   "resource",
+  ...DeepCategorySchema.options,
   "unknown",
 ]);
+
+/** The categories an LLM may choose: everything except the deep-check ones. */
+export const TriageCategorySchema = CategorySchema.exclude(DeepCategorySchema.options);
 
 const IsoTimestamp = z.iso.datetime();
 const Confidence = z.number().min(0).max(1);
@@ -107,6 +117,7 @@ export const IncidentStateSchema = z.strictObject({
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 export type RunbookId = z.infer<typeof RunbookIdSchema>;
 export type Category = z.infer<typeof CategorySchema>;
+export type DeepCategory = z.infer<typeof DeepCategorySchema>;
 export type Signal = z.infer<typeof SignalSchema>;
 export type Evidence = z.infer<typeof EvidenceSchema>;
 export type Hypothesis = z.infer<typeof HypothesisSchema>;

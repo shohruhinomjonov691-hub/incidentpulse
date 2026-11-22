@@ -19,7 +19,9 @@ services:
       DATABASE_URL: ${A_DATABASE_URL-postgres://toy:toy@db.internal:5432/toy}
       # "injection" => the app returns 500 and its logs carry a prompt-injection payload: scenario 12.
       # injection (12) | badcommit (8) | slow (9) | disk (10, simulated)
+      # spa (healthy single-page app) | mixed (15) | api502 (16)
       FAULT: ${A_FAULT:-}
+      PUBLIC_HOST: a.localhost
     restart: unless-stopped
 
   a-nginx:

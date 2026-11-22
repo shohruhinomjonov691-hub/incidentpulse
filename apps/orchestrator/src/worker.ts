@@ -10,6 +10,8 @@ import type { Notifier } from "@incidentpulse/telegram-bot";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import {
+  HEALTH_DEEP_JOB,
+  HEALTH_DEEP_SCHEDULER,
   HEALTH_POLL_EVERY_MINUTES,
   HEALTH_POLL_JOB,
   HEALTH_POLL_SCHEDULER,
@@ -39,6 +41,8 @@ export interface WorkerOptions {
   onResume?(request: ResumeRequest): Promise<void>;
   /** LLM-free health poller, run every 15 minutes inside the single-concurrency worker. */
   healthPoller?: HealthPoller;
+  /** Minutes between deep health checks (0 or unset: off). Same queue, so also serialized. */
+  healthDeepEveryMinutes?: number;
 }
 
 /** The shared queue serializes observation, scheduling, and investigation across worker processes. */
@@ -85,12 +89,34 @@ export async function createIncidentWorker(options: WorkerOptions) {
     await queue.removeJobScheduler(HEALTH_POLL_SCHEDULER);
   }
 
+  const deepMinutes = options.healthDeepEveryMinutes ?? 0;
+  if (options.healthPoller && deepMinutes > 0) {
+    const jobOptions = { attempts: 1, removeOnComplete: true, removeOnFail: { age: 86_400 } };
+    await queue.upsertJobScheduler(
+      HEALTH_DEEP_SCHEDULER,
+      { every: deepMinutes * 60_000 },
+      { name: HEALTH_DEEP_JOB, opts: jobOptions },
+    );
+    // Also once after a start: a deploy is when a page is most likely to change under us.
+    await queue.add(
+      HEALTH_DEEP_JOB,
+      {},
+      { ...jobOptions, jobId: `${HEALTH_DEEP_JOB}-boot-${Date.now()}` },
+    );
+  } else {
+    await queue.removeJobScheduler(HEALTH_DEEP_SCHEDULER);
+  }
+
   const RESUME_JOB = "graph-resume";
   const worker = new Worker(
     queueName,
     async (job) => {
       if (job.name === HEALTH_POLL_JOB) {
         await options.healthPoller?.run();
+        return;
+      }
+      if (job.name === HEALTH_DEEP_JOB) {
+        await options.healthPoller?.runDeep();
         return;
       }
       if (job.name === WEEKLY_SCHEDULER_NAME || job.name === DAILY_RECHECK_SCHEDULER_NAME) {

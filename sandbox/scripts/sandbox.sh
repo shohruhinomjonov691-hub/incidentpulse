@@ -5,7 +5,8 @@
 #   sandbox.sh certs        generate the sandbox CA + leaf certificates (idempotent)
 #   sandbox.sh up           healthy stack
 #   sandbox.sh reset        restore the healthy stack (after any fault)
-#   sandbox.sh inject N     inject scenario N (1-14) into the toy apps (see sandbox/README.md)
+#   sandbox.sh inject N     inject scenario N (1-16) into the toy apps (see sandbox/README.md)
+#   sandbox.sh spa          healthy single-page app on "a" (the baseline of scenarios 15 and 16)
 #   sandbox.sh flap-recover end the 20 s outage of scenario 14
 #   sandbox.sh status       docker ps for the stack
 #   sandbox.sh down         stop and remove the stack
@@ -94,11 +95,14 @@ case "${1:-}" in
       13) set_cert a a-expired; set_cert b b-expired                             # two projects, one shared cause: expired certificate
           docker exec ipsb-a-nginx nginx -s reload; docker exec ipsb-b-nginx nginx -s reload ;;
       14) docker stop ipsb-a-app >/dev/null ;;                                   # flapping: down now, `flap-recover` brings it back
-      *) echo "unknown scenario '${2:-}' (supported: 1-14)" >&2; exit 2 ;;
+      15) A_FAULT=mixed compose up -d --force-recreate a-app ;;                  # HTTPS page whose JS calls http://a.localhost:3003 (mixed content)
+      16) A_FAULT=api502 compose up -d --force-recreate a-app ;;                 # page 200, but its API route answers 502
+      *) echo "unknown scenario '${2:-}' (supported: 1-16)" >&2; exit 2 ;;
     esac
     ;;
+  spa) A_FAULT=spa compose up -d --force-recreate a-app ;;                    # healthy single-page app
   flap-recover) docker start ipsb-a-app >/dev/null ;;
   status) docker ps -a --filter "name=ipsb-" --format 'table {{.Names}}\t{{.State}}\t{{.Status}}' ;;
   down) compose down ;;
-  *) echo "usage: sandbox.sh certs|up|reset|inject N|flap-recover|status|down" >&2; exit 2 ;;
+  *) echo "usage: sandbox.sh certs|up|reset|spa|inject N|flap-recover|status|down" >&2; exit 2 ;;
 esac

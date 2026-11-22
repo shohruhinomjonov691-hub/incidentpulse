@@ -1,6 +1,6 @@
 import type { ModelPricing } from "@incidentpulse/config";
 import type { Redactor } from "@incidentpulse/redact";
-import { type Category, CategorySchema, type Evidence } from "@incidentpulse/schemas";
+import { type Category, type Evidence, TriageCategorySchema } from "@incidentpulse/schemas";
 import { Agent, handoff, type Model, type ModelResponse, run, Usage } from "@openai/agents";
 import { z } from "zod";
 import { costOf, sumUsage } from "../cost.ts";
@@ -18,7 +18,7 @@ import { createInfraMcp, type SpecialistFactoryOptions } from "./specialists.ts"
 
 /** What the triage agent passes along with a handoff. */
 export const HandoffInputSchema = z.object({
-  category: z.enum(CategorySchema.options),
+  category: z.enum(TriageCategorySchema.options),
   reason: z.string(),
   alsoNeeded: z.array(z.enum(SPECIALISTS)),
 });

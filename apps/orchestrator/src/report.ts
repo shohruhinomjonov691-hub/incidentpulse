@@ -131,6 +131,61 @@ export function formatEscalation(view: EscalationView): string {
   return lines.join("\n");
 }
 
+/** The slice of a deep-health finding that a message needs (see deep-health.ts). */
+export interface DegradedFinding {
+  category: "mixed_content" | "api_down";
+  url: string;
+  file?: string | undefined;
+  detail?: string | undefined;
+}
+
+const MAX_LISTED = 5;
+
+/**
+ * LLM-free Telegram message for a Degraded project: the page answers 200 but is unusable. There is no
+ * runbook for these categories, so the message is always an escalation with no proposal and no buttons.
+ */
+export function formatDegraded(view: {
+  project: ProjectId;
+  findings: DegradedFinding[];
+  reminder: boolean;
+}): string {
+  const mixed = view.findings.filter((f) => f.category === "mixed_content");
+  const api = view.findings.filter((f) => f.category === "api_down");
+  const categories = [mixed.length > 0 ? "mixed_content" : "", api.length > 0 ? "api_down" : ""]
+    .filter(Boolean)
+    .join(", ");
+  const name = PROJECT_DISPLAY_NAMES[view.project];
+  const lines = [
+    `🟠 ${name} — Degraded${view.reminder ? " (davom etmoqda)" : ""} (${categories})`,
+    "Sahifa 200 beradi, lekin foydalanuvchi uchun to'liq ishlamasligi mumkin.",
+  ];
+  const list = (items: DegradedFinding[], line: (f: DegradedFinding) => string) => {
+    for (const item of items.slice(0, MAX_LISTED)) lines.push(`• ${line(item)}`);
+    if (items.length > MAX_LISTED) lines.push(`• … yana ${items.length - MAX_LISTED} ta`);
+  };
+  if (mixed.length > 0) {
+    lines.push(
+      "Mixed content (HTTPS sahifa http:// / ws:// manzilni chaqiradi, brauzer bloklaydi):",
+    );
+    list(
+      mixed,
+      (f) =>
+        `${f.url} — fayl: ${f.file ?? "?"}${f.detail?.startsWith("<") ? ` (${f.detail})` : ""}`,
+    );
+  }
+  if (api.length > 0) {
+    lines.push("API:");
+    list(api, (f) => `${f.url} — ${f.detail ?? "xato"}`);
+  }
+  lines.push("Taklif: yo'q — runbook mavjud emas, avtomatik tuzatish yo'q, inson ko'rigi kerak.");
+  return lines.join("\n");
+}
+
+export function formatDegradedRecovered(project: ProjectId): string {
+  return `🟢 ${PROJECT_DISPLAY_NAMES[project]} — Degraded tugadi: mixed content va API tekshiruvi normal.`;
+}
+
 export function formatFailureNotice(project: ProjectId, incidentId: string): string {
   return [
     `⚠️ ${PROJECT_DISPLAY_NAMES[project]} — incident #${incidentId}`,

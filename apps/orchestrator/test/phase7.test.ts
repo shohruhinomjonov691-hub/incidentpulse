@@ -559,4 +559,67 @@ describe.skipIf(!process.env.IT_REDIS_URL)("worker and the health poller (real R
       await redis.quit();
     }
   });
+
+  test("the deep check is its own job on its own interval, once at start too, and off at 0", async () => {
+    const url = process.env.IT_REDIS_URL as string;
+    const redact = createRedactor();
+    const make = async (queueName: string, minutes: number | undefined, withDeep = true) => {
+      const run = vi.fn(async () => ({ checked: 0, changes: [] }));
+      const runDeep = vi.fn(async () => ({ checked: 0, degraded: 0, levels: [] }));
+      const worker = await createIncidentWorker({
+        redisUrl: url,
+        investigations: {} as never,
+        investigateMode: "on_change",
+        notifier: { send: async () => ({ messageId: 1 }) },
+        redact,
+        log: createLogger(redact),
+        queueName,
+        healthPoller: (withDeep ? { run, runDeep } : { run }) as never,
+        ...(minutes === undefined ? {} : { healthDeepEveryMinutes: minutes }),
+      });
+      return { worker, run, runDeep };
+    };
+    const redis = new RedisClient(url);
+    const names: string[] = [];
+    const cleanup = async () => {
+      for (const name of names) {
+        const keys = await redis.keys(`bull:${name}:*`);
+        if (keys.length) await redis.del(...keys);
+      }
+      await redis.quit();
+    };
+    try {
+      const on = `it-deep-${randomUUID()}`;
+      names.push(on);
+      const a = await make(on, 60);
+      // BullMQ fires an `every` scheduler at once and we add a boot job: a second look right after the
+      // first is harmless (same findings, same day: silent), and a restart is covered even when the
+      // scheduler already exists.
+      await vi.waitFor(() => expect(a.runDeep.mock.calls.length).toBeGreaterThanOrEqual(1), {
+        timeout: 8000,
+      });
+      expect(a.run).toHaveBeenCalledTimes(1);
+      // the repeating scheduler exists with the configured interval (60 min), next to the 15-minute poll
+      const every = await redis.zrange(`bull:${on}:repeat`, 0, -1);
+      expect(every).toContain("health-deep-scheduler");
+      expect(await redis.hget(`bull:${on}:repeat:health-deep-scheduler`, "every")).toBe("3600000");
+      expect(await redis.hget(`bull:${on}:repeat:health-poll-every-15-minutes`, "pattern")).toBe(
+        "0 */15 * * * *",
+      );
+      await a.worker.close();
+
+      const off = `it-deep-off-${randomUUID()}`;
+      names.push(off);
+      const b = await make(off, 0);
+      await vi.waitFor(() => expect(b.run).toHaveBeenCalledTimes(1), { timeout: 8000 });
+      await new Promise((r) => setTimeout(r, 500));
+      expect(b.runDeep).not.toHaveBeenCalled();
+      expect(await redis.zrange(`bull:${off}:repeat`, 0, -1)).not.toContain(
+        "health-deep-scheduler",
+      );
+      await b.worker.close();
+    } finally {
+      await cleanup();
+    }
+  }, 30_000);
 });

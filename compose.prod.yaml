@@ -209,6 +209,9 @@ services:
       # LLM-free health poller: every 15 minutes, investigation only when a project's state changes.
       HEALTH_POLL_ENABLED: "true"
       HEALTH_POLL_URLS_JSON: ${HEALTH_POLL_URLS_JSON:-}
+      # LLM-free deep health (mixed content + optional API checks), every HEALTH_DEEP_INTERVAL_MIN minutes; 0 = off.
+      HEALTH_DEEP_INTERVAL_MIN: ${HEALTH_DEEP_INTERVAL_MIN:-60}
+      HEALTH_DEEP_JSON: ${HEALTH_DEEP_JSON:-}
       # Optional. Blank = off.
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
