@@ -8,7 +8,7 @@
 | Symptom | HTTPS unusable: the server answered with another project's certificate |
 | Root cause | The nginx vhost for `kervan.uz` listened on port 80 only (no `ssl`), and no certificate had ever been issued for the domain |
 | Fix | `certbot --nginx -d kervan.uz --non-interactive --redirect`, approved by a human in Telegram |
-| Detection → recovery | about **3 minutes** (15:14 → 15:17 KST), almost all of it spent waiting for the human |
+| Detection → TLS recovery | about **3 minutes** (15:14 → 15:17 KST), almost all of it spent waiting for the human. This is when `https://kervan.uz` first returned 200; the site was **not fully working** until a second, manual fix (see [Second finding](#second-finding-mixed-content)) |
 | Investigation cost | **$0.0076** |
 | Collateral damage | none: the other 5 sites kept answering 200 |
 | Resulting certificate | valid for 89 days |
@@ -99,10 +99,30 @@ Success is not "the command exited 0". After execution the system re-probes the 
 - **15:21**: the independent health poller, a separate component from the incident pipeline, polled again and confirmed the site was healthy.
 - The other **5 production sites** answered 200 throughout: no collateral damage.
 - The new certificate is valid for **89 days**.
+- Caveat: both checks only look at the status code of the home page. That passed, and it turned out not to be the whole story (next section).
 
 ![Telegram: recovered, with a link to the postmortem](case-study/telegram-3-recovered-postmortem.png)
 
 ![Telegram: the poller independently confirms the site is back](case-study/telegram-4-poller-confirmed.png)
+
+## Second finding: mixed content
+
+The TLS fix was correct and the incident was closed as recovered, but **the site was still broken for real users.** Opening `https://kervan.uz` now worked, yet the page had no data: the "Signature Dishes" section showed *"No signature dishes yet!"*.
+
+**Cause.** The frontend was built with `REACT_APP_API_URL=http://kervan.uz:3003`, and the Socket.IO client uses the same address. Over HTTP that worked. Once the page was served over HTTPS, the browser treated every call to `http://kervan.uz:3003` as mixed content and blocked it, so no API request and no WebSocket connection ever left the page. Before the fix nobody could have seen this: the browser was loading the site over plain HTTP, where the same URLs were allowed. In other words, fixing TLS exposed a second fault that had been hidden behind the first.
+
+![kervan.uz over HTTPS after the certificate fix: the page loads with a secure connection](case-study/kervan-after-https-home.png)
+
+**IncidentPulse did not notice.** The poller's definition of healthy is "the home page returns 200", and it did: the HTML shell of a single-page app loads fine whether or not its API calls succeed. So the recovery probe (15:17) and the independent poll (15:21) both reported success while users saw an empty menu. The agent's scope ended where its tools ended: it diagnosed and repaired the thing it could see, the certificate, and had no way to know that the page was unusable. I found this by opening the site in a browser, not through any alert.
+
+**Fixed by hand, not by the agent.** There is no runbook for this and I did not add one on the spot:
+
+1. nginx: a TLS reverse proxy on port **8443** using the `kervan.uz` certificate, forwarding to the backend at `127.0.0.1:3003`, with the WebSocket `Upgrade` headers so Socket.IO keeps working;
+2. frontend: `REACT_APP_API_URL=https://kervan.uz:8443`;
+3. backend: `FRONTEND_URL=https://kervan.uz`, so its allowed origin matches the new scheme;
+4. the frontend was rebuilt, because `REACT_APP_*` values are baked in at build time.
+
+I did not record the time at which the data came back, so there is no honest "time to full recovery" number for this incident. The 3 minutes above covers the TLS part only.
 
 ## What went well
 
@@ -111,7 +131,14 @@ Success is not "the command exited 0". After execution the system re-probes the 
 - **It was cheap.** $0.0076 for the investigation, in line with the $0.0083 mean measured on the sandbox eval.
 - **The human stayed in the loop without slowing the machine.** The system did everything up to the decision in under a minute; the person only had to read one message and tap one button.
 - **The blast radius was small by construction.** One runbook, one domain, 20 allowed commands, a single-use token. The other five sites were never touched.
-- **Verification was independent.** The system checked the result itself, and a second, unrelated component confirmed it.
+- **Verification was independent**, in the sense that the system checked the result itself and a second component confirmed it. What they checked was too narrow, see below.
+
+## What didn't go well
+
+- **The agent fixed the right thing and still left the site broken.** Its view of the world is its tool set: HTTP status, TLS, nginx, certbot. Within that view it was correct and well-evidenced. Outside it, there was a second fault it could not see, and "recovered" was declared on a definition of health that was too thin.
+- **"Recovered" meant "the home page returned 200".** That check cannot tell a working single-page app from an empty shell. The incident closed, the postmortem was written, and the Telegram message said 🟢. A reader of the headline numbers should know that the 3 minutes is for the TLS fault only.
+- **The second fault was found by a human with a browser.** The monitoring system that was supposed to remove that need did not.
+- **I should have been less sure about "no collateral damage".** It holds for the other five sites; it does not describe Kervan's own users between the TLS fix and the manual fix.
 
 ## What we fixed during rollout
 
@@ -126,6 +153,9 @@ Items 3 and 4 are the kind of issue that only shows up when a privileged helper 
 
 ## Follow-ups
 
+- **Deep health checks (first priority).** Extend the poller beyond the home-page status code: fetch the HTML and flag any `http://` sub-resource on an `https://` page (mixed content), and check the application's main API endpoint (for Kervan, the one that serves the menu) for a 2xx with a non-empty body. A later step is a headless-browser check that watches for blocked requests, which would have caught this one directly. This is still LLM-free, so it keeps the zero-cost property of the poller.
+- **Long term: `api.kervan.uz`.** Serve the API on a subdomain with its own certificate on port 443, instead of a custom port behind a second TLS proxy. The `:8443` setup is a workaround that works but adds a non-standard port to every URL.
+- **Close the raw ports on the firewall.** Block ports **3000** and **3003** from the outside in UFW, so the backend is reachable only through nginx. Until then the old plain-HTTP address of the backend is still open to the internet.
 - **A typo in the model's prose.** The cause sentence says "codiTrail.gotrips.cloud"; the evidence beside it spells `codetrail.gotrips.cloud` correctly. Cosmetic, but a human reading the summary should be able to trust it. The next step is to quote hostnames from evidence verbatim instead of retyping them, and to add a check that any hostname in the prose also appears in the evidence.
 - **Make the approval wait visible.** About 3 minutes of detection → recovery is almost entirely the person. Worth measuring per incident, and considering a reminder when a proposal sits unanswered.
 - **One real incident is an anecdote.** It shows the loop works on real infrastructure; it is not a success rate. The 14-scenario eval remains the only broader measurement.
