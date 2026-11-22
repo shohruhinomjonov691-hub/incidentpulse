@@ -1,6 +1,11 @@
 import { lookup } from "node:dns/promises";
 import type { DeepApiTarget } from "@incidentpulse/config";
-import { type HttpProbeResult, httpProbe, isAllowedTarget } from "@incidentpulse/mcp-infra";
+import {
+  fetchProbeResponse,
+  type HttpProbeResult,
+  httpProbe,
+  isAllowedTarget,
+} from "@incidentpulse/mcp-infra";
 import type { DeepCategory, ProjectId } from "@incidentpulse/schemas";
 
 /**
@@ -124,7 +129,7 @@ export async function fetchText(
     fetchImpl?: typeof fetch;
   },
 ): Promise<Fetched> {
-  const doFetch = options.fetchImpl ?? fetch;
+  const doFetch = options.fetchImpl ?? fetchProbeResponse;
   let current: URL;
   try {
     current = new URL(url);

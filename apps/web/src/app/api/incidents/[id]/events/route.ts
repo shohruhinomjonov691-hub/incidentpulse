@@ -6,7 +6,7 @@ import { journal } from "../../../../../server/store.ts";
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const token = request.cookies.get(COOKIE)?.value;
-  if (!validSession(token)) return new Response(null, { status: 401 });
+  if (!(await validSession(token))) return new Response(null, { status: 401 });
   const { id } = await params;
   if (!validIncidentId(id) || !(await journal().get(id)))
     return new Response(null, { status: 404 });
@@ -27,11 +27,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           !cancelled &&
           !request.signal.aborted &&
           Date.now() < deadline &&
-          validSession(token)
+          (await validSession(token))
         ) {
           const events = await journal().events(id, cursor);
-          if (cancelled || request.signal.aborted || !validSession(token)) break;
           if (events.length) {
+            if (!(await validSession(token)) || cancelled || request.signal.aborted) break;
             cursor = events.at(-1)?.id ?? cursor;
             controller.enqueue(
               encoder.encode(

@@ -13,6 +13,7 @@ export {
   tcpUpstream,
   type Upstream,
 } from "./docker-adapter/server.ts";
+export { fetchProbeResponse } from "./probe-network.ts";
 export * from "./schemas.ts";
 export { createInfraServer, type InfraServerOptions } from "./server.ts";
 export { dnsLookup } from "./tools/dns.ts";

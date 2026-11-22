@@ -63,9 +63,13 @@ function base(
 describe("infra specialist: Agents SDK ↔ real mcp-infra over stdio", () => {
   let server: ReturnType<typeof createServer>;
   let host: string;
+  let received = 0;
 
   beforeAll(async () => {
-    server = createServer((_req, res) => res.writeHead(503).end());
+    server = createServer((_req, res) => {
+      received++;
+      res.writeHead(503).end();
+    });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -87,7 +91,7 @@ describe("infra specialist: Agents SDK ↔ real mcp-infra over stdio", () => {
     const model = new ScriptedModel([
       toolCall("c1", "http_probe", { url: `http://${host}/` }),
       toolCall("c2", "dns_lookup", { host: "127.0.0.1" }),
-      finalText("The server answered 503."),
+      finalText("The probe blocked the destination IP."),
     ]);
     const r = await infra(model).investigate(input);
 
@@ -95,8 +99,9 @@ describe("infra specialist: Agents SDK ↔ real mcp-infra over stdio", () => {
       ["i1", "http_probe", "mcp-infra"],
       ["i2", "dns_lookup", "mcp-infra"],
     ]);
-    expect(r.evidence[0]?.excerpt).toContain("status=503");
-    expect(r.summary).toBe("The server answered 503.");
+    expect(r.evidence[0]?.excerpt).toContain("error=IP_NOT_ALLOWED");
+    expect(received).toBe(0);
+    expect(r.summary).toBe("The probe blocked the destination IP.");
     expect(r.toolCalls).toBe(2);
     expect(r.blockedCalls).toBe(0);
     // 3 model calls: (1000+1000+1500) in, (100+100+200) out

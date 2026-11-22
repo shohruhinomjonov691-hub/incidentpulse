@@ -22,6 +22,7 @@
     "@incidentpulse/redact": "workspace:*",
     "@incidentpulse/runner-client": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:frameworks",
+    "undici": "8.13.1",
     "zod": "catalog:"
   }
 }

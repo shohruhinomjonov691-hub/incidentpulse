@@ -1,8 +1,28 @@
 import { execFileSync } from "node:child_process";
+import dns from "node:dns";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { type AddressInfo, createServer } from "node:net";
+import { type AddressInfo, BlockList, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { vi } from "vitest";
+
+/** Permit only the local fixture socket, without adding an exception to production probes. */
+export function allowLoopbackFixture() {
+  const check = BlockList.prototype.check;
+  vi.spyOn(BlockList.prototype, "check").mockImplementation(function (this: BlockList, ip, family) {
+    return ip !== "127.0.0.1" && check.call(this, ip, family);
+  });
+}
+
+export function mockProbeDns(resolve: (host: string) => dns.LookupAddress[]) {
+  return vi
+    .spyOn(dns, "lookup")
+    .mockImplementation(((
+      hostname: string,
+      _options: dns.LookupAllOptions,
+      callback: (error: null, addresses: dns.LookupAddress[]) => void,
+    ) => queueMicrotask(() => callback(null, resolve(hostname)))) as typeof dns.lookup);
+}
 
 /** Self-signed cert for localhost / 127.0.0.1 generated with the system openssl. */
 export function makeSelfSignedCert(): { key: string; cert: string } {

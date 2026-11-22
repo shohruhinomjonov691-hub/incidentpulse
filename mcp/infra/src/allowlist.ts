@@ -11,7 +11,11 @@ import { isIP } from "node:net";
 export const DEFAULT_PORTS: readonly number[] = [80, 443];
 
 export function normalizeHost(host: string): string {
-  return host.trim().toLowerCase().replace(/\.$/, "");
+  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
+  const unbracketed = normalized.slice(1, -1);
+  return normalized.startsWith("[") && normalized.endsWith("]") && isIP(unbracketed) === 6
+    ? unbracketed
+    : normalized;
 }
 
 export function parseAllowedHosts(value: string | undefined): string[] {
@@ -27,9 +31,10 @@ interface Entry {
 }
 
 function parseEntry(entry: string): Entry {
-  const match = /^(.+):(\d{1,5})$/.exec(entry);
-  if (match && !isIP(entry)) return { host: match[1] as string, port: Number(match[2]) };
-  return { host: entry, port: undefined };
+  const host = normalizeHost(entry);
+  const match = isIP(host) ? null : /^(.+):(\d{1,5})$/.exec(host);
+  if (match) return { host: normalizeHost(match[1] as string), port: Number(match[2]) };
+  return { host, port: undefined };
 }
 
 function hostMatches(host: string, allowedHost: string): boolean {

@@ -57,8 +57,8 @@ describe("triage agent (Agents SDK handoffs)", () => {
     const model = new ScriptedModel([
       toolCall("c1", "http_probe", { url: `http://127.0.0.1:${port}/` }),
       toolCall("c2", "transfer_to_infra_specialist", {
-        category: "http_5xx",
-        reason: "the site answers 502, I need TLS/HTTP facts and container state",
+        category: "unknown",
+        reason: "the probe blocked the destination IP, I need infra and container facts",
         alsoNeeded: ["logs"],
       }),
     ]);
@@ -69,13 +69,13 @@ describe("triage agent (Agents SDK handoffs)", () => {
     });
 
     expect(decision).toMatchObject({
-      category: "http_5xx",
+      category: "unknown",
       specialists: ["infra", "logs"], // handoff target first, then the extra request
       fallback: false,
-      handoffs: [{ to: "infra_specialist", reason: expect.stringContaining("502") }],
+      handoffs: [{ to: "infra_specialist", reason: expect.stringContaining("blocked") }],
     });
     expect(decision.evidence.map((e) => [e.id, e.tool])).toEqual([["t1", "http_probe"]]);
-    expect(decision.evidence[0]?.excerpt).toContain("status=502");
+    expect(decision.evidence[0]?.excerpt).toContain("error=IP_NOT_ALLOWED");
     // Only the triage model was billed: 2 calls × (1000 in, 100 out). The receiver costs nothing.
     expect(decision.costUsd).toBeCloseTo((2000 * 0.75 + 200 * 4.5) / 1e6, 8);
     expect(model.requests).toHaveLength(2);

@@ -1,5 +1,7 @@
 import { isIP } from "node:net";
 import tls, { type PeerCertificate } from "node:tls";
+import { normalizeHost } from "../allowlist.ts";
+import { assertProbeHost, probeLookup } from "../probe-network.ts";
 import { type TlsInspectResult, TlsInspectResultSchema } from "../schemas.ts";
 
 const DAY_MS = 86_400_000;
@@ -38,7 +40,7 @@ export function summarizeCertificate(input: {
   const datesKnown = !Number.isNaN(notBefore.getTime()) && !Number.isNaN(notAfter.getTime());
   const expired = datesKnown ? notAfter.getTime() < now.getTime() : undefined;
   const notYetValid = datesKnown ? notBefore.getTime() > now.getTime() : undefined;
-  const hostnameMatch = tls.checkServerIdentity(host, cert) === undefined;
+  const hostnameMatch = tls.checkServerIdentity(normalizeHost(host), cert) === undefined;
 
   const result: TlsInspectResult = {
     host,
@@ -81,51 +83,60 @@ export function tlsInspect(host: string, options: TlsInspectOptions): Promise<Tl
   const port = options.port ?? 443;
   const now = options.now ?? (() => new Date());
   const started = Date.now();
+  const hostname = normalizeHost(host);
 
   return new Promise((resolve) => {
     let settled = false;
+    let socket: tls.TLSSocket | undefined;
     // Hard deadline for the whole handshake (an idle timeout alone misses slow-loris servers).
     const deadline = setTimeout(() => fail("ETIMEDOUT"), options.timeoutMs);
     const finish = (result: TlsInspectResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      socket.destroy();
+      socket?.destroy();
       resolve(TlsInspectResultSchema.parse(result));
     };
     const fail = (error: string) =>
       finish({ host, port, connected: false, error, latencyMs: Date.now() - started });
 
-    const socket = tls.connect(
-      {
-        host,
+    try {
+      assertProbeHost(hostname);
+      const connectOptions = {
+        host: hostname,
         port,
-        ...(isIP(host) ? {} : { servername: host }),
+        ...(isIP(hostname) ? {} : { servername: hostname }),
+        autoSelectFamily: true,
+        lookup: probeLookup,
         rejectUnauthorized: false,
-      },
-      () => {
-        const cert = socket.getPeerCertificate(false);
-        if (!cert || Object.keys(cert).length === 0) return fail("NO_CERTIFICATE");
-        try {
-          finish(
-            summarizeCertificate({
-              host,
-              port,
-              cert,
-              authorized: socket.authorized,
-              authorizationError: socket.authorizationError
-                ? String(socket.authorizationError)
-                : undefined,
-              protocol: socket.getProtocol(),
-              now: now(),
-              latencyMs: Date.now() - started,
-            }),
-          );
-        } catch {
-          fail("CERT_PARSE_ERROR");
-        }
-      },
-    );
-    socket.on("error", (e: NodeJS.ErrnoException) => fail(e.code ?? e.name));
+      };
+      socket = tls.connect(connectOptions);
+    } catch (error) {
+      return fail((error as NodeJS.ErrnoException).code ?? "TLS_CONNECT_ERROR");
+    }
+    const connectedSocket = socket;
+    connectedSocket.once("secureConnect", () => {
+      const cert = connectedSocket.getPeerCertificate(false);
+      if (!cert || Object.keys(cert).length === 0) return fail("NO_CERTIFICATE");
+      try {
+        finish(
+          summarizeCertificate({
+            host,
+            port,
+            cert,
+            authorized: connectedSocket.authorized,
+            authorizationError: connectedSocket.authorizationError
+              ? String(connectedSocket.authorizationError)
+              : undefined,
+            protocol: connectedSocket.getProtocol(),
+            now: now(),
+            latencyMs: Date.now() - started,
+          }),
+        );
+      } catch {
+        fail("CERT_PARSE_ERROR");
+      }
+    });
+    connectedSocket.on("error", (e: NodeJS.ErrnoException) => fail(e.code ?? e.name));
   });
 }

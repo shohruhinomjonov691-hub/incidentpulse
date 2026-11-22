@@ -1,8 +1,8 @@
 import type { AddressInfo } from "node:net";
 import tls, { type PeerCertificate } from "node:tls";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { summarizeCertificate, tlsInspect } from "../src/tools/tls.ts";
-import { makeSelfSignedCert } from "./helpers.ts";
+import { allowLoopbackFixture, makeSelfSignedCert, mockProbeDns } from "./helpers.ts";
 
 const NOW = new Date("2026-11-21T00:00:00Z");
 
@@ -74,23 +74,42 @@ describe("summarizeCertificate", () => {
 describe("tlsInspect against a local server", () => {
   let server: tls.Server;
   let port: number;
+  let seenSni: string[];
 
   beforeAll(async () => {
     const { key, cert } = makeSelfSignedCert();
-    server = tls.createServer({ key, cert }, (s) => s.end());
+    server = tls.createServer(
+      {
+        key,
+        cert,
+        SNICallback(host, callback) {
+          seenSni.push(host);
+          callback(null, tls.createSecureContext({ key, cert }));
+        },
+      },
+      (s) => s.end(),
+    );
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     port = (server.address() as AddressInfo).port;
   });
   afterAll(() => new Promise<void>((r) => server.close(() => r())));
+  beforeEach(() => {
+    allowLoopbackFixture();
+    seenSni = [];
+  });
+  afterEach(() => vi.restoreAllMocks());
 
   test("reports a self-signed chain as invalid but still returns the certificate", async () => {
-    const r = await tlsInspect("127.0.0.1", { timeoutMs: 3000, port });
+    const dns = mockProbeDns(() => [{ address: "127.0.0.1", family: 4 }]);
+    const r = await tlsInspect("localhost", { timeoutMs: 3000, port });
     expect(r.connected).toBe(true);
     expect(r.chainValid).toBe(false);
     expect(r.validationError).toMatch(/SELF_SIGNED|UNABLE_TO/);
     expect(r.hostnameMatch).toBe(true);
     expect(r.expired).toBe(false);
     expect(r.sans).toEqual(expect.arrayContaining(["localhost"]));
+    expect(dns).toHaveBeenCalledOnce();
+    expect(seenSni).toEqual(["localhost"]);
   });
 
   test("connection refused is data, not an exception", async () => {
@@ -109,4 +128,21 @@ describe("tlsInspect against a local server", () => {
     for (const s of sockets) s.destroy();
     await new Promise<void>((res) => silent.close(() => res()));
   });
+});
+
+test("rejects blocked IP literals and DNS answers before the TLS handshake", async () => {
+  expect(await tlsInspect("::1", { timeoutMs: 1000 })).toMatchObject({
+    connected: false,
+    error: "IP_NOT_ALLOWED",
+  });
+  const dns = mockProbeDns(() => [{ address: "192.168.1.2", family: 4 }]);
+  try {
+    expect(await tlsInspect("kervan.uz", { timeoutMs: 1000 })).toMatchObject({
+      connected: false,
+      error: "IP_NOT_ALLOWED",
+    });
+    expect(dns).toHaveBeenCalledOnce();
+  } finally {
+    dns.mockRestore();
+  }
 });

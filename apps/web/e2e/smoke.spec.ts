@@ -1,7 +1,7 @@
 import { createJournal } from "@incidentpulse/orchestrator/journal";
 import { expect, test } from "@playwright/test";
 import { Pool } from "pg";
-import { PASSWORD, SCHEMA } from "../playwright.config.ts";
+import { ORIGIN, PASSWORD, SCHEMA } from "../playwright.config.ts";
 import { INCIDENT } from "./global-setup.ts";
 
 test.skip(!process.env.IT_DATABASE_URL, "IT_DATABASE_URL and IT_REDIS_URL are required");
@@ -12,6 +12,34 @@ test("pages are protected until the admin signs in", async ({ page }) => {
     await expect(page).toHaveURL(/\/login$/);
   }
   expect((await page.request.get(`/api/incidents/${INCIDENT}/events`)).status()).toBe(401);
+});
+
+test("a copied session cookie stops working after sign out", async ({ browser, page }) => {
+  expect(
+    (
+      await page.request.post("/api/session", {
+        data: { password: PASSWORD },
+        headers: { origin: ORIGIN },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.goto("/incidents");
+  const copied = await browser.newContext({
+    baseURL: ORIGIN,
+    storageState: await page.context().storageState(),
+  });
+  try {
+    const replay = await copied.newPage();
+    await replay.goto("/incidents");
+    await expect(replay).toHaveURL(/\/incidents$/);
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect((await copied.request.get(`/api/incidents/${INCIDENT}/events`)).status()).toBe(401);
+    await replay.goto("/incidents");
+    await expect(replay).toHaveURL(/\/login$/);
+  } finally {
+    await copied.close();
+  }
 });
 
 test("login, incident list and live timeline", async ({ page }, testInfo) => {

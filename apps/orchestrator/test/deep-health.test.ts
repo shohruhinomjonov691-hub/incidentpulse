@@ -1,12 +1,12 @@
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, BlockList } from "node:net";
 import { KNOWN_PRICING } from "@incidentpulse/config";
 import { loadRunbookRegistry } from "@incidentpulse/mcp-actions";
 import type { HttpProbeResult } from "@incidentpulse/mcp-infra";
 import { createRedactor } from "@incidentpulse/redact";
 import type { IncidentJob, ProjectId } from "@incidentpulse/schemas";
 import type { Redis } from "ioredis";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createDeepChecker,
   DEEP_LIMITS,
@@ -111,7 +111,18 @@ describe("scanScript", () => {
 
 describe("fetchText (real sockets)", () => {
   let server: Server | undefined;
+  beforeEach(() => {
+    const check = BlockList.prototype.check;
+    vi.spyOn(BlockList.prototype, "check").mockImplementation(function (
+      this: BlockList,
+      ip,
+      family,
+    ) {
+      return ip !== "127.0.0.1" && check.call(this, ip, family);
+    });
+  });
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (!server) return;
     server.closeAllConnections();
     await new Promise((r) => server?.close(r));
@@ -218,6 +229,12 @@ describe("fetchText (real sockets)", () => {
       finalUrl: `${s.url}/b`,
     });
     expect(await fetchText(`${s.url}/out`, options)).toEqual({ error: "HOST_NOT_ALLOWED" });
+    expect(
+      await fetchText(`${s.url}/out`, {
+        ...options,
+        allowedHosts: [...s.allowedHosts, "169.254.169.254"],
+      }),
+    ).toEqual({ error: "IP_NOT_ALLOWED" });
   });
 
   test("a host outside the allowlist, a bad URL and credentials are refused before any request", async () => {

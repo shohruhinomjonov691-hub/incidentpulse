@@ -1,4 +1,5 @@
 import { isAllowedTarget } from "../allowlist.ts";
+import { fetchProbeResponse } from "../probe-network.ts";
 import { type HttpProbeResult, HttpProbeResultSchema } from "../schemas.ts";
 
 const MAX_REDIRECTS = 5;
@@ -29,7 +30,7 @@ export interface HttpProbeOptions {
 
 /** GET without reading the body. Redirects are followed manually and only within the allowlist. */
 export async function httpProbe(url: string, options: HttpProbeOptions): Promise<HttpProbeResult> {
-  const doFetch = options.fetchImpl ?? fetch;
+  const doFetch = options.fetchImpl ?? fetchProbeResponse;
   const started = Date.now();
   const redirects: HttpProbeResult["redirects"] = [];
   const done = (r: Omit<HttpProbeResult, "latencyMs" | "redirects" | "url">) =>
@@ -51,7 +52,7 @@ export async function httpProbe(url: string, options: HttpProbeOptions): Promise
     if (!isAllowedTarget(current.hostname, port, options.allowedHosts)) {
       return done({ completed: false, error: "HOST_NOT_ALLOWED", blockedRedirect: current.origin });
     }
-    let response: Response;
+    let response: Awaited<ReturnType<typeof doFetch>>;
     try {
       response = await doFetch(current, {
         method: "GET",

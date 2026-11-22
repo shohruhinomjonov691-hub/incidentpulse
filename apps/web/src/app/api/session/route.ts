@@ -5,6 +5,7 @@ import {
   newSession,
   originMatches,
   readJson,
+  revokeSession,
   sessionOptions,
   validPassword,
 } from "../../../server/session.ts";
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
     if (validPassword(body.password)) {
       await limiter.success(ip);
       const response = NextResponse.json({ ok: true });
-      response.cookies.set(COOKIE, newSession(), sessionOptions());
+      response.cookies.set(COOKIE, await newSession(), sessionOptions());
       return response;
     }
     const failed = await limiter.failure(ip);
@@ -39,6 +40,11 @@ const tooMany = (seconds: number) =>
 
 export async function DELETE(request: NextRequest) {
   if (!originMatches(request)) return new Response(null, { status: 403 });
+  try {
+    await revokeSession(request.cookies.get(COOKIE)?.value);
+  } catch {
+    return new Response(null, { status: 503 });
+  }
   const response = NextResponse.json({ ok: true });
   response.cookies.set(COOKIE, "", { ...sessionOptions(), maxAge: 0 });
   return response;
