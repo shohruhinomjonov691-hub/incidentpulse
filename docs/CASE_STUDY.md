@@ -1,6 +1,6 @@
 # Case study: the first real incident
 
-**IncidentPulse found, diagnosed and (after one human tap) fixed a broken TLS certificate on a live production site, 3 minutes after the first poll saw it down. This is the first real incident the system ever handled; everything before it ran against a local sandbox.**
+**IncidentPulse found, diagnosed and (after one human tap) fixed a broken TLS certificate on a live production site, 3 minutes after the first poll saw it down. That exposed a second fault the system could not see, and the site was fully working again after about 32 minutes. This is the first real incident the system ever handled; everything before it ran against a local sandbox.**
 
 | | |
 |---|---|
@@ -8,7 +8,8 @@
 | Symptom | HTTPS unusable: the server answered with another project's certificate |
 | Root cause | The nginx vhost for `kervan.uz` listened on port 80 only (no `ssl`), and no certificate had ever been issued for the domain |
 | Fix | `certbot --nginx -d kervan.uz --non-interactive --redirect`, approved by a human in Telegram |
-| Detection → TLS recovery | about **3 minutes** (15:14 → 15:17 KST), almost all of it spent waiting for the human. This is when `https://kervan.uz` first returned 200; the site was **not fully working** until a second, manual fix (see [Second finding](#second-finding-mixed-content)) |
+| Detection → TLS recovery | about **3 minutes** (15:14 → 15:17 KST), almost all of it spent waiting for the human. This is when `https://kervan.uz` first returned 200 |
+| Detection → **full recovery** | about **32 minutes** (15:14 → 15:46 KST): 3 min for the TLS fix, 19 min until a human noticed the site still had no data, 8 min to fix that by hand, 2 min to verify. See [Second finding](#second-finding-mixed-content) |
 | Investigation cost | **$0.0076** |
 | Collateral damage | none: the other 5 sites kept answering 200 |
 | Resulting certificate | valid for 89 days |
@@ -41,7 +42,10 @@ All times are KST (UTC+9), 2026-11-22.
 | ~15:17 | The human taps **✅ Bajar** |
 | ~15:17 | Host runner executes `certbot --nginx -d kervan.uz --non-interactive --redirect`, then `nginx -t` → ok |
 | 15:17 | Recovery probe: `https://kervan.uz` → **200**. 🟢 Tiklandi (recovered) message, postmortem generated |
-| 15:21 | The independent health poll confirms: "Kervan — qayta ishlayapti" (working again) |
+| 15:21 | The independent health poll confirms: "Kervan — qayta ishlayapti" (working again). It was checking only the home-page status code |
+| 15:36 | **Second fault found by a human**, by opening `https://kervan.uz` in a browser: the page loads but shows no data ("No signature dishes yet!"). Cause: mixed content, the frontend still calls `http://kervan.uz:3003` |
+| 15:44 | Fixed by hand: nginx TLS proxy on port 8443 (with WebSocket upgrade), `REACT_APP_API_URL=https://kervan.uz:8443`, backend `FRONTEND_URL=https://kervan.uz`, frontend rebuilt |
+| 15:46 | Verified in the browser: data loads, login works, the cart works. **Full recovery: ~32 minutes after detection** |
 
 ## Evidence
 
@@ -122,7 +126,7 @@ The TLS fix was correct and the incident was closed as recovered, but **the site
 3. backend: `FRONTEND_URL=https://kervan.uz`, so its allowed origin matches the new scheme;
 4. the frontend was rebuilt, because `REACT_APP_*` values are baked in at build time.
 
-I did not record the time at which the data came back, so there is no honest "time to full recovery" number for this incident. The 3 minutes above covers the TLS part only.
+**Time to full recovery: about 32 minutes** (15:14 → 15:46). The TLS fault was fixed at 15:17; the mixed-content problem was found at 15:36 by opening the site in a browser, fixed by hand at 15:44, and confirmed at 15:46 in the browser (data loads, login and the cart work). So the system's part (3 minutes) is a small fraction of the real outage: **19 of the 32 minutes passed after IncidentPulse had declared the site recovered and before anyone noticed it was not**.
 
 ## What went well
 
@@ -136,9 +140,9 @@ I did not record the time at which the data came back, so there is no honest "ti
 ## What didn't go well
 
 - **The agent fixed the right thing and still left the site broken.** Its view of the world is its tool set: HTTP status, TLS, nginx, certbot. Within that view it was correct and well-evidenced. Outside it, there was a second fault it could not see, and "recovered" was declared on a definition of health that was too thin.
-- **"Recovered" meant "the home page returned 200".** That check cannot tell a working single-page app from an empty shell. The incident closed, the postmortem was written, and the Telegram message said 🟢. A reader of the headline numbers should know that the 3 minutes is for the TLS fault only.
+- **"Recovered" meant "the home page returned 200".** That check cannot tell a working single-page app from an empty shell. The incident closed, the postmortem was written, and the Telegram message said 🟢. The 3 minutes is for the TLS fault only; the honest figure for the user-visible outage is about 32 minutes, and 19 of them were spent with a green "recovered" status.
 - **The second fault was found by a human with a browser.** The monitoring system that was supposed to remove that need did not.
-- **I should have been less sure about "no collateral damage".** It holds for the other five sites; it does not describe Kervan's own users between the TLS fix and the manual fix.
+- **"No collateral damage" needs a qualifier.** It holds for the other five sites; Kervan's own users saw an empty site from the TLS fix at 15:17 until the manual fix at 15:44 (before 15:17 HTTPS did not work at all, but plain HTTP did).
 
 ## What we fixed during rollout
 
@@ -157,7 +161,7 @@ Items 3 and 4 are the kind of issue that only shows up when a privileged helper 
 - **Long term: `api.kervan.uz`.** Serve the API on a subdomain with its own certificate on port 443, instead of a custom port behind a second TLS proxy. The `:8443` setup is a workaround that works but adds a non-standard port to every URL.
 - **Close the raw ports on the firewall.** Block ports **3000** and **3003** from the outside in UFW, so the backend is reachable only through nginx. Until then the old plain-HTTP address of the backend is still open to the internet.
 - **A typo in the model's prose.** The cause sentence says "codiTrail.gotrips.cloud"; the evidence beside it spells `codetrail.gotrips.cloud` correctly. Cosmetic, but a human reading the summary should be able to trust it. The next step is to quote hostnames from evidence verbatim instead of retyping them, and to add a check that any hostname in the prose also appears in the evidence.
-- **Make the approval wait visible.** About 3 minutes of detection → recovery is almost entirely the person. Worth measuring per incident, and considering a reminder when a proposal sits unanswered.
+- **Make the approval wait visible.** About 3 minutes of detection → TLS recovery is almost entirely the person. Worth measuring per incident, and considering a reminder when a proposal sits unanswered.
 - **One real incident is an anecdote.** It shows the loop works on real infrastructure; it is not a success rate. The 14-scenario eval remains the only broader measurement.
 - **Not covered by this incident:** the transient exit, escalation, a rejected proposal, and a repair that fails verification.
 
