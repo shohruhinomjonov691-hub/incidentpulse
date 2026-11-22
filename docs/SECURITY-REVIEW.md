@@ -10,11 +10,15 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### H1. Sudoers o‘rnatilishi umumiy `/tmp` dagi faylga ishonadi
 
+Status: fixed (`f72ea26`)
+
 **Shart va ta’sir.** Deploy root nomidan oldindan ma’lum `/tmp` yo‘liga yozadi. `visudo` va `install` shu yo‘lni alohida ochadi. Agar yo‘l yoki faylni mahalliy kam huquqli foydalanuvchi boshqara olsa, root o‘rnatadigan mazmun tekshirilgan mazmundan farq qilishi va root vakolati kengayishi mumkin. Ta’sir deploy yoki policy yangilanishi vaqtida yuzaga keladi. Ubuntu’ning sticky directory himoyasi va symlink hamda regular-file sysctl sozlamalari ehtimolni kamaytirishi mumkin. Ularning VPS’dagi qiymatlari tekshirilmagan.
 
 **Tuzatish.** Faylni root’ga tegishli `0700` katalogda `umask 077` bilan yarating. Aynan shu nusxani `visudo` bilan tekshirib, root’ga tegishli yakuniy katalogga atomik o‘rnating. Birinchi deploy va qayta generatsiya uchun bir xil tartibni hujjatlashtiring. [docs/DEPLOY.md:282](DEPLOY.md#L282) · [docs/DEPLOY.md:510](DEPLOY.md#L510)
 
 ### H2. Web va Postgres approval chegarasini mustaqil himoya qilmaydi
+
+Status: fixed (`f72ea26`)
 
 **Shart va ta’sir.** Prod `web` va `orchestrator` bir Postgres bootstrap rolidan va bir `APPROVAL_HMAC_SECRET` qiymatidan foydalanadi. Web’ga callback yaratish kerak, lekin unga berilgan kalit runner ijro tokenining ham imzolash kaliti. Orchestrator esa `approved` qatorning joriy `runbookId` va `params` qiymatlarini imzolaydi. Callback imzosi faqat ID va qaror amaliga bog‘langan. Web jarayoni yoki shu DB yozish vakolati komprometatsiyasida approval holati va asl ko‘rsatilgan amalning yaxlitligi yo‘qoladi. Orchestrator ishlayotgan bo‘lsa, o‘zgartirilgan approval uning normal ijro oqimiga kirishi mumkin. Runner’ning o‘z allowlist’i saqlanadi. Faqat web kalitiga ega bo‘lishning o‘zi socket’ga tarmoq yo‘lini bermaydi.
 
@@ -22,11 +26,15 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### H3. `certbot_nginx_issue` dry-run’i approval’dan oldin nginx’ni o‘zgartiradi
 
+Status: fixed (`f72ea26`)
+
 **Shart va ta’sir.** Graph dry-run’ni approval qatorini yaratishdan oldin ishlatadi. Runner dry-run uchun IPC ruxsatiga va host policy’ga tayanadi. `certbot --nginx` autentifikatori challenge uchun live nginx konfiguratsiyasini vaqtincha tahrirlaydi va nginx’ni reload qiladi, so‘ng o‘zgarishni qaytaradi. Mos vhost mavjud va sertifikat yetishmasa, bu o‘zgarishlar inson qarorisiz sodir bo‘lishi mumkin. IPC mijozi takroriy dry-run bilan nginx va ACME resurslarini band qila oladi. Jarayon uzilsa, staging o‘zgarishlarining tozalanishi Certbot’ga bog‘liq.
 
 **Tuzatish.** Approval oldidan inventar va statik konfiguratsiya tekshiruvi bilan cheklaning yoki staging’ni izolyatsiya qiling. Live nginx’ga tegadigan barcha qadamlarni tasdiq va audit ortiga o‘tkazing. Dry-run endpoint’iga navbat limiti va alohida ruxsat bering. [apps/orchestrator/src/graph.ts:676](../apps/orchestrator/src/graph.ts#L676) · [host/actions-runner/src/commands.ts:104](../host/actions-runner/src/commands.ts#L104) · [host/actions-runner/src/server.ts:265](../host/actions-runner/src/server.ts#L265) · [host/actions-runner/src/server.ts:349](../host/actions-runner/src/server.ts#L349) · [docs/DEPLOY.md:631](DEPLOY.md#L631)
 
 ### H4. Docker proxy barcha konteynerlar uchun keng o‘qish ruxsatini beradi
+
+Status: fixed (`f72ea26`)
 
 **Shart va ta’sir.** `POST=0` bilan birga butun `CONTAINERS=1` API guruhi yoqilgan. Docker loyihasi bo‘yicha filtr faqat MCP kodida ishlaydi. `dockerapi` tarmog‘ida to‘g‘ridan-to‘g‘ri proxy’ga murojaat qila oladigan jarayon MCP filtridan tashqarida boshqa konteynerlarning inspect metama’lumotlari, env sirlari, loglari va o‘qishga ruxsat berilgan fayl ma’lumotlariga yetishi mumkin. Bu credential exposure va yonlama kirish xavfi. Raw Docker socket proxy konteynerining o‘ziga ulangan. Shu konteyner komprometatsiyasida `:ro` Unix socket orqali yuboriladigan Docker API amallarini cheklamaydi.
 
@@ -36,11 +44,15 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### M1. Runner navbatda turgan approval muddatini qayta tekshirmaydi
 
+Status: fixed (`f72ea26`)
+
 **Shart va ta’sir.** HMAC va expiry navbatga kirishdan oldin tekshiriladi. Uzoq Certbot ishlari yoki takroriy dry-run’lar ortida so‘rov kutsa, muddati tugagan ish ledger’da claim qilinib boshlanishi mumkin. Endpoint navbat uzunligini cheklamaydi va HTTP client uzilganda allaqachon navbatga olingan ish avtomatik bekor bo‘lmaydi.
 
 **Tuzatish.** Navbatdan ish olinganda va birinchi o‘zgartiruvchi qadam oldidan expiry’ni tekshiring. Navbat va IPC mijozlari uchun limit, request cancellation hamda rad etilgan ishlar auditi qo‘shing. [host/actions-runner/src/server.ts:56](../host/actions-runner/src/server.ts#L56) · [host/actions-runner/src/server.ts:275](../host/actions-runner/src/server.ts#L275) · [host/actions-runner/src/server.ts:389](../host/actions-runner/src/server.ts#L389) · [host/actions-runner/src/token.ts:36](../host/actions-runner/src/token.ts#L36)
 
 ### M2. Telegram `/stop` runner’ga yuborilgan ishlarni to‘xtatmaydi
+
+Status: fixed (`f72ea26`)
 
 **Shart va ta’sir.** Bot Redis flag qo‘yadi. Orchestrator resume, graph va `execute_runbook` kirishida flag’ni ko‘radi. Ammo oxirgi check va runner’ga jo‘natish orasida DB amali bor. Runner navbatida yoki ichida flag tekshiruvi yo‘q. Operator `/stop` tasdig‘ini ko‘rgandan keyin ham oldin jo‘natilgan runbook boshlanishi yoki qolgan qadamlarini bajarishi mumkin.
 
@@ -48,11 +60,15 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### M3. Root helper loyiha upstream’ini mustaqil tekshirmaydi
 
+Status: deferred (single-admin VPS)
+
 **Shart va ta’sir.** Runner PM2 PID daraxti va loopback HTTP orqali portning loyihaga tegishliligini tekshiradi. Sudoers root helper’ni port andozasi bilan ochadi. Helper o‘zi faqat domen, port diapazoni va TCP tinglovchini tekshiradi. Runner Unix akkaunti komprometatsiyasida sudoers doirasida root helper orqali ichki xizmatni yangi ommaviy vhost’ga ulash mumkin bo‘lib qoladi. Standart yo‘lda ham PID/port tekshiruvi va reload orasida listener almashishi mumkin. Case study’dagi Kervan domenining exact vhost’i mavjudligi bu holatni shu domen uchun to‘sadi. `nginx -T` tahlilida mavjudlik exact nom bo‘yicha tekshirilgani sababli wildcard yoki regex vhost ishlatiladigan muhitlarda routing o‘zgarishi ham mumkin.
 
 **Tuzatish.** Root helper’da ham domen, loyiha va upstream bog‘lanishini tekshiring. Imkon bo‘lsa, oldindan belgilangan port yoki loyiha Unix socket’idan foydalaning. Bir xil host lock ostida config va listener’ni qayta tekshiring. Wildcard hamda regex vhost semantikasini hisobga oling va rollback’ni aynan shu ish yaratgan fayllar bilan cheklang. [host/actions-runner/src/server.ts:152](../host/actions-runner/src/server.ts#L152) · [host/actions-runner/src/commands.ts:251](../host/actions-runner/src/commands.ts#L251) · [host/actions-runner/src/nginx-site.ts:104](../host/actions-runner/src/nginx-site.ts#L104) · [host/actions-runner/src/nginx-site.ts:163](../host/actions-runner/src/nginx-site.ts#L163) · [docs/CASE_STUDY.md:54](CASE_STUDY.md#L54)
 
 ### M4. Ijro tokeni yakuniy host qadamlarini to‘liq bog‘lamaydi
+
+Status: fixed (`f72ea26`)
 
 **Shart va ta’sir.** Imzo runbook ID va request parametrlarini qoplaydi. Host policy’dan keladigan `www`, webroot, Compose fayli va binar yo‘llari imzolanmaydi. Runner so‘rov kelganda qadamlarni joriy policy’dan qayta hisoblaydi. Operator policy’ni tasdiq jarayonida yangilasa yoki orchestrator va host konfiguratsiyasi farqlansa, tasdiqlangan domen va runbook amalda boshqa scope’ga ega bo‘lishi mumkin. Web tasdiq kartasida parametrlar alohida chiqarilmaydi. `nginx_site_proxy` dry-run xulosasi ayrim qiymatlarni ko‘rsatadi, boshqa runbook’larda ko‘rinish command output’iga bog‘liq.
 
@@ -60,11 +76,15 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### M5. Ishonchsiz dalil ruxsat etilgan runbook tanloviga ta’sir qiladi
 
+Status: deferred (single-admin VPS)
+
 **Shart va ta’sir.** Log, Codetrail excerpt va commit matni regex bilan filtrlanadi, so‘ng dalil sifatida modelga boradi. Grounding guardrail iqtibos ID’si mavjudligini tekshiradi. U matndan chiqarilgan sababning to‘g‘riligini isbotlamaydi. Masalan, `certbot_renew` kandidati uchun expiry belgisi istalgan dalil excerpt’idan olinadi. Log matnini, commit’ni yoki probed endpoint’ning ayrim metadata qiymatlarini boshqaradigan tomon xulosani va ruxsatli runbook taklifini chalg‘itishi mumkin. Noto‘g‘ri taklifning oddiy ijrosi uchun inson tasdig‘i va runner policy talab qilinadi. Live Certbot dry-run istisnosi H3’da qayd etilgan. `compose.prod.yaml` CodeTrail/GitHub credential’larini uzatmaydi, shu sabab commit yo‘li bu deploy namunasida konfiguratsiyaga bog‘liq.
 
 **Tuzatish.** Restart, reload va sertifikat amallariga nomzodlarni typed, qayta o‘lchangan faktlardan deterministik chiqaring. TLS expiry uchun sertifikat inventari yoki strukturali TLS o‘lchoviga tayaning. Model xulosasi bilan operator qaroriga asos bo‘lgan faktlarni UI’da aniq belgilang. [apps/orchestrator/src/guardrails.ts:19](../apps/orchestrator/src/guardrails.ts#L19) · [apps/orchestrator/src/guardrails.ts:172](../apps/orchestrator/src/guardrails.ts#L172) · [apps/orchestrator/src/evidence.ts:94](../apps/orchestrator/src/evidence.ts#L94) · [apps/orchestrator/src/evidence.ts:157](../apps/orchestrator/src/evidence.ts#L157) · [apps/orchestrator/src/remediation-proposer.ts:41](../apps/orchestrator/src/remediation-proposer.ts#L41) · [apps/orchestrator/src/remediation-proposer.ts:124](../apps/orchestrator/src/remediation-proposer.ts#L124)
 
 ### M6. HTTP va TLS allowlist’i ulanish IP’sini cheklamaydi
+
+Status: deferred (single-admin VPS)
 
 **Shart va ta’sir.** HTTP redirect’larning har bir bosqichida hostname va port tekshiriladi. Shu tekshiruv ruxsatli subdomenlarni ham qamraydi. HTTP va TLS klientlari DNS natijasi yoki haqiqiy ulanish IP’sini private, loopback va link-local manzillarga nisbatan tekshirmaydi. Ruxsatli DNS nomini yoki tegishli redirect’ni boshqara oladigan tomon orchestrator tarmog‘idan ichki HTTP GET yoki TLS handshake yuzaga kelishiga sabab bo‘lishi mumkin. Oddiy `http_probe` body’ni bekor qiladi, lekin status va redirect metama’lumotlari chiqadi. Deep health body’ni limit bilan o‘qiydi va URL topilmalarini xabarga uzatadi.
 
@@ -72,17 +92,23 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 
 ### M7. Login limiti bitta global hisoblagich orqali adminni bloklaydi
 
+Status: fixed (`f72ea26`)
+
 **Shart va ta’sir.** Hamma manbalar bitta Redis kalitida 15 daqiqaga 8 ta urinishni bo‘lishadi. Hisoblagich parol tekshiruvidan oldin ishlaydi. Internetdan parolga ega bo‘lmagan mijoz shu umumiy limitni band qilsa, to‘g‘ri parol bilan yangi session ochish ham `429` oladi. `Origin` tekshiruvi brauzer CSRF’ini cheklaydi. Brauzerdan tashqari mijoz HTTP origin header’ini belgilay oladi. Amaldagi session’lar ta’sirlanmaydi.
 
 **Tuzatish.** Ishonchli reverse proxy tasdiqlagan manba identitetiga asoslangan limit, progressive backoff va global yuk himoyasini qo‘llang. Global himoya qonuniy operatorning favqulodda login yo‘lini to‘smasin. [apps/web/src/app/api/session/route.ts:12](../apps/web/src/app/api/session/route.ts#L12) · [apps/web/src/server/store.ts:50](../apps/web/src/server/store.ts#L50) · [apps/web/src/server/session.ts:46](../apps/web/src/server/session.ts#L46)
 
 ### M8. Umumiy Redis credential `/stop` va queue vakolatini bo‘lishadi
 
+Status: deferred (single-admin VPS)
+
 **Shart va ta’sir.** Intake, web va orchestrator bir Redis parolini ishlatadi. Prod konfiguratsiyasida ular uchun ACL chegarasi ko‘rsatilmagan. Intake yoki web jarayoni komprometatsiyasida Redis orqali pause holati, BullMQ navbati va byudjet hisobiga ta’sir qilish mumkin. Intake HTTP’dagi webhook HMAC navbatga Redis orqali bevosita yozishni himoyalamaydi. Bu approval qarori yoki host tokenini o‘zi bermaydi.
 
 **Tuzatish.** Har servisga alohida Redis ACL user va zarur command/key huquqlarini bering. Intake’ning enqueue vakolatini va web’ning login/byudjet vakolatini action controls’dan ajrating. Zarur bo‘lsa qo‘shma queue yozish huquqini broker API bilan cheklang. [compose.prod.yaml:75](../compose.prod.yaml#L75) · [compose.prod.yaml:153](../compose.prod.yaml#L153) · [compose.prod.yaml:180](../compose.prod.yaml#L180) · [compose.prod.yaml:244](../compose.prod.yaml#L244) · [apps/intake/src/server.ts:39](../apps/intake/src/server.ts#L39) · [apps/orchestrator/src/worker.ts:141](../apps/orchestrator/src/worker.ts#L141) · [apps/orchestrator/src/action-flow.ts:22](../apps/orchestrator/src/action-flow.ts#L22)
 
 ### M9. Log va dry-run chiqishida redaction to‘liq qo‘llanmaydi
+
+Status: fixed (`f72ea26`)
 
 **Shart va ta’sir.** Host va Docker loglari satrni avval qisqartiradi, so‘ng redaction qiladi. Bu uzun secret yoki ko‘p qatorli private key’ni to‘liq shakliga mos pattern’dan chiqarib yuborishi mumkin. Host dry-run chiqishi runner regex’idan o‘tadi va orchestrator’da qayta redact qilinmasdan approval jadvaliga yoziladi. Web shu qiymatni ko‘rsatadi. PM2, nginx yoki Certbot chiqishida noma’lum formatdagi secret bo‘lsa, uning fragmenti dalil, model so‘rovi yoki DB/web tarixiga yetishi mumkin. Runner xato jurnali ham `error.message` ni o‘z redactor’idan o‘tkazmaydi.
 
@@ -91,6 +117,8 @@ Review repo kodi, namunaviy host policy, Compose va deploy hujjatlariga asoslang
 ## Low
 
 ### L1. Logout avval olingan session’ni serverda bekor qilmaydi
+
+Status: deferred (single-admin VPS)
 
 **Shart va ta’sir.** Session stateless HMAC bilan imzolanadi va sakkiz soat amal qiladi. Logout cookie’ni faqat joriy brauzerdan o‘chiradi. Agar session nusxasi oldin sizib chiqqan bo‘lsa, u expiry yoki admin paroli almashishigacha dashboard va approval API uchun amal qiladi. Ushbu topilma session o‘g‘irlanishining alohida yo‘lini ko‘rsatmaydi.
 
