@@ -37,3 +37,12 @@ Residual risks (documented, accepted):
 3. The runner service is deliberately not sandboxed with `NoNewPrivileges`/`ProtectSystem`/`ProtectHome` (sudo and the commands it runs need them). The boundary is the dedicated user, exact sudoers, socket permissions and the token.
 4. Anyone in group `incidentpulse-ipc` can use the read operations and dry-runs (`certbot --dry-run` talks to the Let's Encrypt staging API and counts against its rate limits). Keep the group to the orchestrator container only.
 5. `nginx_config` matches explicit `server_name` values only; a wildcard server block is reported as "vhost missing".
+
+## Follow-up after the first look at the real server
+
+Facts from the server changed three things. Each has a test.
+
+- **Kervan already has a vhost** (`/etc/nginx/conf.d/kervan.conf`, `listen 80`, `proxy_pass http://localhost:3000/`, no 443, no certificate). The inventory reads `nginx -T`, so it already saw every included file, but it called a domain "has a vhost" only when *every* name (apex and, with `www`, `www.`) was served. With `www: true` and an apex-only block it said "no vhost" and would have offered `nginx_site_proxy`, which the helper then refuses. Now a domain has a vhost when *any* of its names is served (the same rule as the root helper), the unprivileged runner refuses `nginx_site_proxy` outright before the helper runs (dry-run and execute, valid token or not), and `certbot_nginx_issue` explains a partial match ("add www by hand or drop www") instead of pointing at `nginx_site_proxy`.
+- **`www` is off for the first rollout** (policy example, scope, DEPLOY.md): the certificate is requested with `-d kervan.uz` only.
+- **The certbot dry-run used `--webroot`.** A vhost that existed before IncidentPulse has no ACME location, so a webroot staging run cannot pass there even though the real `certbot --nginx` run does. The dry-run now uses the same authenticator as the real run (`certonly --dry-run --nginx`). Trade-off: certbot's nginx authenticator briefly adds the challenge location to the vhost and reloads nginx, then restores it. This was not run against the real server.
+- The web container is published on `127.0.0.1:${WEB_HOST_PORT:-3100}` because Kervan owns 3000.

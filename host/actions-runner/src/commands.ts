@@ -113,13 +113,12 @@ export function resolveRunbook(
         dryRun: [
           sudoStep(
             "certbot",
+            // Same authenticator as the real run: a pre-existing vhost has no ACME webroot location.
             [
               "certonly",
               "--dry-run",
               "--non-interactive",
-              "--webroot",
-              "-w",
-              project.webroot,
+              "--nginx",
               ...domainArgs(domain, project),
             ],
             CERTBOT_TIMEOUT_MS,

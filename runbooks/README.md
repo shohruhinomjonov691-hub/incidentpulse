@@ -7,7 +7,7 @@ In production the commands run in the host actions runner (`host/actions-runner`
 | Runbook | Dry run or check | Target |
 |---|---|---|
 | `certbot_renew` | Certbot staging renewal | Configured domain with evidence of expiry |
-| `certbot_nginx_issue` | Inventory check and Certbot staging issuance via the configured webroot | Configured domain missing a certificate or Nginx vhost |
+| `certbot_nginx_issue` | Inventory check and Certbot staging issuance with the nginx authenticator (same as the real run) | Configured domain missing a certificate or Nginx vhost |
 | `nginx_reload` | `nginx -t` | Host assigned to the project |
 | `docker_restart` | Inspect the exact container | Allowlisted container name |
 | `pm2_restart` | Describe the exact app | Allowlisted PM2 app name |

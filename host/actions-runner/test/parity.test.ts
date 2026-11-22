@@ -1,7 +1,7 @@
 import { loadRunbookRegistry } from "@incidentpulse/mcp-actions";
 import { describe, expect, test } from "vitest";
 import { resolveRunbook } from "../src/commands.ts";
-import { policy } from "./helpers.ts";
+import { policy, policyNoWww } from "./helpers.ts";
 
 /**
  * runbooks/*.yaml (what the orchestrator resolves and the sandbox runs) and the runner's own command
@@ -63,5 +63,44 @@ describe("runner command table matches runbooks/*.yaml", () => {
     });
     expect(yaml.risk).toBe(runner.risk);
     expect(yaml.run).toEqual([]);
+  });
+});
+
+describe("the same without www (Kervan's first rollout)", () => {
+  const noWww = loadRunbookRegistry(
+    {
+      kervan: {
+        domains: ["kervan.uz"],
+        pm2: ["KERVAN", "KERVAN-REACT"],
+        nginx: true,
+        webroot: "/var/www/acme",
+        www: false,
+      },
+    },
+    undefined,
+    { remote: true },
+  );
+
+  test("certbot_nginx_issue: -d kervan.uz only, identical in both tables", () => {
+    const yaml = noWww.resolve("kervan", {
+      runbookId: "certbot_nginx_issue",
+      params: { domain: "kervan.uz" },
+    });
+    const runner = resolveRunbook(policyNoWww, "kervan", "certbot_nginx_issue", {
+      domain: "kervan.uz",
+    });
+    expect(runner.dryRun.map((s) => [s.bin, ...s.args])).toEqual(
+      yaml.dryRun.map((s) => [s.program, ...s.args]),
+    );
+    expect(runner.run.map((s) => [s.bin, ...s.args])).toEqual(
+      yaml.run.map((s) => [s.program, ...s.args]),
+    );
+    expect(yaml.run[0]?.args).toEqual([
+      "--nginx",
+      "-d",
+      "kervan.uz",
+      "--non-interactive",
+      "--redirect",
+    ]);
   });
 });

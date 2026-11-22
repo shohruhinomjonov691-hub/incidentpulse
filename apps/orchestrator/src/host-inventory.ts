@@ -4,7 +4,11 @@ import type { ProjectId } from "@incidentpulse/schemas";
 
 export interface DomainInventory {
   domain: string;
-  /** An nginx server block answers for the domain (and www.<domain> when the scope covers www). */
+  /**
+   * Some nginx server block (any file `nginx -T` includes: sites-enabled, conf.d, ...) already names the
+   * domain or, when the scope covers www, `www.<domain>`. The same rule the host helper uses to refuse
+   * nginx_site_proxy, so a proposal and its refusal can never disagree.
+   */
   vhost: boolean;
   /** A certbot certificate covers the domain (and www.<domain> when the scope covers www). */
   certificate: boolean;
@@ -37,7 +41,7 @@ export function createHostInventory(client: RunnerClient, scopes: ActionScopes) 
       return {
         domains: scope.domains.map((domain) => ({
           domain,
-          vhost: names(domain).every((n) => served.has(n)),
+          vhost: names(domain).some((n) => served.has(n)),
           certificate: names(domain).every((n) => certified.has(n)),
         })),
         upstreams: ports.apps

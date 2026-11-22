@@ -3,15 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRunnerClient } from "@incidentpulse/runner-client";
 import { afterEach, describe, expect, test } from "vitest";
+import type { Policy } from "../src/policy.ts";
 import { createHttpServer, createRunner } from "../src/server.ts";
 import { type Ledger, signApproval, TOKEN_LIFETIME_MS } from "../src/token.ts";
 import {
   CERTS,
   fakeExec,
   NGINX_DUMP,
+  NGINX_DUMP_CONF_D,
   PM2_JLIST,
   PS_OUTPUT,
   policy,
+  policyNoWww,
   SECRET,
   SS_OUTPUT,
 } from "./helpers.ts";
@@ -33,7 +36,11 @@ function memoryLedger(): Ledger & { claimed: string[] } {
   };
 }
 
-function build(answers: Parameters<typeof fakeExec>[0], probe: number | undefined = 200) {
+function build(
+  answers: Parameters<typeof fakeExec>[0],
+  probe: number | undefined = 200,
+  using: Policy = policy,
+) {
   const { exec, calls } = fakeExec({
     [sudo("/usr/bin/pm2 jlist")]: { stdout: PM2_JLIST },
     [sudo("/usr/bin/ss -H -ltnp")]: { stdout: SS_OUTPUT },
@@ -43,7 +50,7 @@ function build(answers: Parameters<typeof fakeExec>[0], probe: number | undefine
   const ledger = memoryLedger();
   const events: Record<string, unknown>[] = [];
   const runner = createRunner({
-    policy,
+    policy: using,
     exec,
     secret: SECRET,
     ledger,
@@ -144,7 +151,7 @@ describe("dry-run", () => {
   });
 
   test("nginx_site_proxy: an upstream that no allowlisted pm2 app owns is refused before any helper runs", async () => {
-    const { runner, calls } = build({});
+    const { runner, calls } = build({ [sudo("/usr/sbin/nginx -T")]: { stdout: NGINX_DUMP } });
     const r = await runner.handle("POST", "/v1/runbooks/dry-run", {
       project: "kervan",
       runbookId: "nginx_site_proxy",
@@ -159,7 +166,10 @@ describe("dry-run", () => {
     const helper = sudo(
       "/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/src/nginx-site.ts check kervan.uz 127.0.0.1:3000",
     );
-    const { runner } = build({ [helper]: { stdout: "would create" } });
+    const { runner } = build({
+      [helper]: { stdout: "would create" },
+      [sudo("/usr/sbin/nginx -T")]: { stdout: NGINX_DUMP },
+    });
     const r = await runner.handle("POST", "/v1/runbooks/dry-run", {
       project: "kervan",
       runbookId: "nginx_site_proxy",
@@ -169,7 +179,7 @@ describe("dry-run", () => {
   });
 
   test("nginx_site_proxy: an upstream answering 502 is refused", async () => {
-    const { runner } = build({}, 502);
+    const { runner } = build({ [sudo("/usr/sbin/nginx -T")]: { stdout: NGINX_DUMP } }, 502);
     const r = await runner.handle("POST", "/v1/runbooks/dry-run", {
       project: "kervan",
       runbookId: "nginx_site_proxy",
@@ -200,7 +210,7 @@ describe("dry-run", () => {
     expect(String(second.body.output)).toContain("use certbot_renew");
 
     const dry = sudo(
-      "/usr/bin/certbot certonly --dry-run --non-interactive --webroot -w /var/www/acme -d kervan.uz -d www.kervan.uz",
+      "/usr/bin/certbot certonly --dry-run --non-interactive --nginx -d kervan.uz -d www.kervan.uz",
     );
     const ready = build({
       [sudo("/usr/bin/certbot certificates")]: { stdout: "" },
@@ -298,6 +308,101 @@ describe("execute", () => {
     const { runner, calls } = build(restart);
     await runner.handle("POST", "/v1/runbooks/execute", execBody("pm2_restart", { app: "KERVAN" }));
     expect(calls.every((c) => !/[;&|`$]/.test(c))).toBe(true);
+  });
+});
+
+describe("Kervan as it really is: conf.d/kervan.conf, listen 80, no 443, no certificate", () => {
+  const siteBody = {
+    project: "kervan",
+    runbookId: "nginx_site_proxy",
+    params: { domain: "kervan.uz", upstream: "127.0.0.1:3000" },
+  };
+  const issueBody = {
+    project: "kervan",
+    runbookId: "certbot_nginx_issue",
+    params: { domain: "kervan.uz" },
+  };
+  const certbotCerts = sudo("/usr/bin/certbot certificates");
+  const nginxT = sudo("/usr/sbin/nginx -T");
+
+  test("nginx_config sees a vhost that lives only in conf.d (nginx -T, not sites-enabled)", async () => {
+    const { runner, calls } = build({ [nginxT]: { stdout: NGINX_DUMP_CONF_D } }, 200, policyNoWww);
+    const r = await runner.handle("POST", "/v1/read", { op: "nginx_config" });
+    expect(r.body.servers).toEqual([
+      { names: ["kervan.uz"], listens: ["80"], ssl: false, proxyPass: ["http://localhost:3000/"] },
+    ]);
+    // One privileged read of the whole configuration; it never looks at sites-enabled on its own.
+    expect(calls.filter((c) => c.includes("nginx"))).toEqual([nginxT]);
+  });
+
+  test.each([
+    ["without www", policyNoWww],
+    ["with www in the policy", policy],
+  ])(
+    "nginx_site_proxy is refused outright when conf.d already names the domain (%s)",
+    async (_n, using) => {
+      const answers = {
+        [nginxT]: { stdout: NGINX_DUMP_CONF_D },
+        [sudo(
+          "/opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/src/nginx-site.ts check kervan.uz 127.0.0.1:3000",
+        )]: { stdout: "would create" },
+      };
+      const dry = build(answers, 200, using);
+      const refused = await dry.runner.handle("POST", "/v1/runbooks/dry-run", siteBody);
+      expect(refused.body).toMatchObject({ ok: false });
+      expect(String(refused.body.output)).toContain("already has a server block for kervan.uz");
+      expect(dry.calls.some((c) => c.includes("nginx-site.ts"))).toBe(false);
+
+      // A valid, unexpired approval token does not change that: nothing runs, not even the root helper.
+      const real = build(answers, 200, using);
+      const executed = await real.runner.handle(
+        "POST",
+        "/v1/runbooks/execute",
+        execBody("nginx_site_proxy", siteBody.params),
+      );
+      expect(executed.body).toMatchObject({ ok: false });
+      expect(String(executed.body.output)).toContain("already has a server block");
+      expect(real.calls.some((c) => c.includes("nginx-site.ts"))).toBe(false);
+    },
+  );
+
+  test("certbot_nginx_issue (-d kervan.uz only): dry run passes, the real run adds 443 + redirect and tests nginx", async () => {
+    const dry = sudo("/usr/bin/certbot certonly --dry-run --non-interactive --nginx -d kervan.uz");
+    const issue = sudo("/usr/bin/certbot --nginx -d kervan.uz --non-interactive --redirect");
+    const answers = {
+      [certbotCerts]: { stdout: "No certificates found." },
+      [nginxT]: { stdout: NGINX_DUMP_CONF_D },
+      [dry]: { stdout: "The dry run was successful." },
+      [issue]: { stdout: "Successfully deployed certificate" },
+      [sudo("/usr/sbin/nginx -t")]: { stderr: "test is successful" },
+    };
+    const first = build(answers, 200, policyNoWww);
+    expect(
+      (await first.runner.handle("POST", "/v1/runbooks/dry-run", issueBody)).body,
+    ).toMatchObject({ ok: true });
+
+    const second = build(answers, 200, policyNoWww);
+    const done = await second.runner.handle(
+      "POST",
+      "/v1/runbooks/execute",
+      execBody("certbot_nginx_issue", issueBody.params),
+    );
+    expect(done.body).toMatchObject({ ok: true });
+    expect(second.calls.filter((c) => c.includes("certbot --nginx"))).toEqual([issue]);
+    expect(second.calls.some((c) => c.includes("www.kervan.uz"))).toBe(false);
+    expect(second.calls.at(-1)).toBe(sudo("/usr/sbin/nginx -t"));
+  });
+
+  test("with www in the policy but only the apex in nginx, certbot is refused with a clear reason", async () => {
+    const { runner } = build(
+      { [certbotCerts]: { stdout: "" }, [nginxT]: { stdout: NGINX_DUMP_CONF_D } },
+      200,
+      policy,
+    );
+    const r = await runner.handle("POST", "/v1/runbooks/dry-run", issueBody);
+    expect(r.body).toMatchObject({ ok: false });
+    expect(String(r.body.output)).toContain("none names www.kervan.uz");
+    expect(String(r.body.output)).not.toContain("create the vhost first");
   });
 });
 

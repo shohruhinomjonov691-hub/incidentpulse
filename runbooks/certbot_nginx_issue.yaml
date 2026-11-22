@@ -4,8 +4,13 @@ risk: medium
 params: { domain: domains }
 prerequisite: missing_certificate_or_vhost
 # {domainArgs} is "-d <domain>" plus "-d www.<domain>" when the project scope sets www.
+# The dry run uses the SAME authenticator as the real run (--nginx), not --webroot. A vhost that already
+# existed before IncidentPulse (for example conf.d/kervan.conf: `location / { proxy_pass ... }` and no ACME
+# location) never serves /.well-known/acme-challenge from a webroot, so a --webroot staging run fails there
+# even though the real `certbot --nginx` run succeeds. The nginx authenticator adds the challenge location
+# itself and restores the file afterwards (it reloads nginx twice); nothing is installed in dry-run mode.
 dry_run:
-  - [certbot, certonly, --dry-run, --non-interactive, --webroot, -w, "{webroot}", "{domainArgs}"]
+  - [certbot, certonly, --dry-run, --non-interactive, --nginx, "{domainArgs}"]
 run:
   - [certbot, --nginx, "{domainArgs}", --non-interactive, --redirect]
   - [nginx, -t]

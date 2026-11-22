@@ -190,15 +190,31 @@ const pricing = KNOWN_PRICING["gpt-5.4-mini"] as ModelPricing;
 const pick = (runbookId: string | null, params: Array<{ name: string; value: string }> = []) =>
   finalText(JSON.stringify({ runbookId, params }));
 
+// Kervan's first rollout: no www (policy, scope and DNS all say so).
+const registryNoWww = loadRunbookRegistry(
+  {
+    kervan: {
+      domains: ["kervan.uz"],
+      pm2: ["KERVAN", "KERVAN-REACT"],
+      nginx: true,
+      webroot: "/var/www/acme",
+      www: false,
+    },
+  },
+  undefined,
+  { remote: true },
+);
+
 async function propose(
   inventory: Parameters<typeof createRemediationProposer>[0]["inventory"],
   script: ReturnType<typeof pick>,
+  using: typeof registry = registry,
 ) {
   const m = makeMocks();
   const { state } = await runIncident(buildIncidentGraph(m.deps), job());
   const model = new ScriptedModel([script]);
   const proposer = createRemediationProposer({
-    registry,
+    registry: using,
     model,
     pricing,
     redact: m.deps.redact,
@@ -270,6 +286,67 @@ describe("remediation proposer with a host inventory", () => {
     expect(result.rejected).toBe(true);
   });
 
+  describe("Kervan as it really is: vhost in conf.d/kervan.conf (listen 80), no certificate, no www", () => {
+    const kervanReal = async () => ({
+      domains: [{ domain: "kervan.uz", vhost: true, certificate: false }],
+      upstreams: [{ app: "KERVAN", upstream: "127.0.0.1:3000" }],
+    });
+
+    test("nginx_site_proxy is not offered; certbot_nginx_issue is, with -d kervan.uz only", async () => {
+      const { result, model } = await propose(
+        kervanReal,
+        pick("certbot_nginx_issue", [{ name: "domain", value: "kervan.uz" }]),
+        registryNoWww,
+      );
+      expect(result.book?.runbookId).toBe("certbot_nginx_issue");
+      expect(result.book?.dryRun[0]?.args).toEqual([
+        "certonly",
+        "--dry-run",
+        "--non-interactive",
+        "--nginx",
+        "-d",
+        "kervan.uz",
+      ]);
+      expect(result.book?.run[0]?.args).toEqual([
+        "--nginx",
+        "-d",
+        "kervan.uz",
+        "--non-interactive",
+        "--redirect",
+      ]);
+      expect(JSON.stringify(result.book)).not.toContain("www.");
+      expect(model.seen()).not.toContain('\\"id\\":\\"nginx_site_proxy\\"');
+    });
+
+    test("the model cannot pick nginx_site_proxy even if it tries: the proposal is rejected", async () => {
+      const { result } = await propose(
+        kervanReal,
+        pick("nginx_site_proxy", [
+          { name: "domain", value: "kervan.uz" },
+          { name: "upstream", value: "127.0.0.1:3000" },
+        ]),
+        registryNoWww,
+      );
+      expect(result.book).toBeUndefined();
+      expect(result.rejected).toBe(true);
+    });
+
+    test("vhost and certificate both present: nothing is proposed for the web-serving runbooks", async () => {
+      const { result } = await propose(
+        async () => ({
+          domains: [{ domain: "kervan.uz", vhost: true, certificate: true }],
+          upstreams: [{ app: "KERVAN", upstream: "127.0.0.1:3000" }],
+        }),
+        pick("nginx_site_proxy", [
+          { name: "domain", value: "kervan.uz" },
+          { name: "upstream", value: "127.0.0.1:3000" },
+        ]),
+        registryNoWww,
+      );
+      expect(result.book).toBeUndefined();
+    });
+  });
+
   test("without an inventory (runner down) nginx_site_proxy is never offered", async () => {
     const { result } = await propose(
       async () => undefined,
@@ -302,14 +379,35 @@ describe("host inventory", () => {
     health: async () => true,
     ...over,
   });
-  const scopes = { kervan: { domains: ["kervan.uz"], pm2: ["KERVAN"], www: true } };
+  const scopes = { kervan: { domains: ["kervan.uz"], pm2: ["KERVAN"], www: false } };
 
-  test("with www in scope the vhost must cover both names; foreign apps are ignored", async () => {
+  test("a vhost from any included file (conf.d) counts; foreign apps are ignored", async () => {
+    // nginx_config reads `nginx -T`, so the runner reports conf.d/kervan.conf like any sites-enabled file.
     const inventory = await createHostInventory(client(), scopes)("kervan");
     expect(inventory).toEqual({
-      domains: [{ domain: "kervan.uz", vhost: false, certificate: false }],
+      domains: [{ domain: "kervan.uz", vhost: true, certificate: false }],
       upstreams: [{ app: "KERVAN", upstream: "127.0.0.1:3000" }],
     });
+  });
+
+  test("with www in scope, a block naming only the apex still counts as a vhost (never a second block)", async () => {
+    const inventory = await createHostInventory(client(), {
+      kervan: { ...scopes.kervan, www: true },
+    })("kervan");
+    expect(inventory?.domains).toEqual([{ domain: "kervan.uz", vhost: true, certificate: false }]);
+  });
+
+  test("no server block names the domain: vhost=false, so nginx_site_proxy may be offered", async () => {
+    const none = client({
+      read: (async (op: string) =>
+        ({
+          nginx_config: { servers: [] },
+          cert_list: { certificates: [] },
+          pm2_ports: { apps: [] },
+        })[op]) as never,
+    });
+    const inventory = await createHostInventory(none, scopes)("kervan");
+    expect(inventory?.domains).toEqual([{ domain: "kervan.uz", vhost: false, certificate: false }]);
   });
 
   test("a runner failure yields undefined, never a guess", async () => {

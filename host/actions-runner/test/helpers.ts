@@ -93,3 +93,41 @@ export const CERTS = `Found the following certs:
     Certificate Path: /etc/letsencrypt/live/other.example/fullchain.pem
     Private Key Path: /etc/letsencrypt/live/other.example/privkey.pem
 `;
+
+/**
+ * The real server: Kervan's vhost lives in /etc/nginx/conf.d/kervan.conf (not in sites-enabled), listens on
+ * 80 only (no 443 block, no certificate) and proxies to localhost:3000. `nginx -T` prints every included file.
+ */
+export const NGINX_DUMP_CONF_D = `nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+# configuration file /etc/nginx/nginx.conf:
+events {}
+http {
+  include /etc/nginx/mime.types;
+  include /etc/nginx/conf.d/*.conf;
+  include /etc/nginx/sites-enabled/*;
+}
+# configuration file /etc/nginx/conf.d/kervan.conf:
+server {
+  listen 80;
+  server_name kervan.uz;
+  location / {
+    proxy_pass http://localhost:3000/;
+  }
+}
+# configuration file /etc/nginx/sites-enabled/default:
+server { listen 80 default_server; server_name _; location / { return 404; } }
+`;
+
+/** Same as `policy`, but Kervan without www (the first production rollout). */
+export const policyNoWww: Policy = parsePolicy({
+  projects: {
+    kervan: {
+      domains: ["kervan.uz"],
+      www: false,
+      pm2: ["KERVAN", "KERVAN-REACT"],
+      nginx: true,
+      webroot: "/var/www/acme",
+    },
+  },
+});

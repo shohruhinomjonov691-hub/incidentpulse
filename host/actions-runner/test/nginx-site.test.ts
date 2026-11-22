@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { type RunResult, renderVhost, type SiteEnv, siteProxy } from "../src/nginx-site.ts";
-import { NGINX_DUMP, policy } from "./helpers.ts";
+import { NGINX_DUMP, NGINX_DUMP_CONF_D, policy, policyNoWww } from "./helpers.ts";
 
 const NGINX = "/usr/sbin/nginx";
 const DUMP_WITH_SITE = `${NGINX_DUMP}\nhttp2 {}\n`;
@@ -164,4 +164,27 @@ describe("nginx_site_proxy helper", () => {
     expect(result.ok).toBe(false);
     expect(result.output).toContain("already exists");
   });
+
+  test.each([
+    ["without www", policyNoWww],
+    ["with www in the policy", policy],
+  ])(
+    "refuses in both modes when conf.d/kervan.conf already names the domain (%s)",
+    async (_n, using) => {
+      for (const mode of ["check", "apply"] as const) {
+        const { env, files, log } = fakeHost();
+        const original = env.run;
+        env.run = async (file, args) =>
+          file === NGINX && args[0] === "-T"
+            ? { code: 0, stdout: NGINX_DUMP_CONF_D, stderr: "" }
+            : original(file, args);
+        const result = await siteProxy(env, using, { ...req, mode });
+        expect(result.ok).toBe(false);
+        expect(result.output).toContain("already exists");
+        // Strict: nothing was written, no backup, no test, no reload; only the read of nginx -T.
+        expect(files.size).toBe(0);
+        expect(log.some((l) => /tar |systemctl|nginx -t/.test(l))).toBe(false);
+      }
+    },
+  );
 });

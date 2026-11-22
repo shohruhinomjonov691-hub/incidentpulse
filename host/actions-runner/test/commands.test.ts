@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { renderSudoers } from "../scripts/render-sudoers.ts";
 import { Denied, privilegedSteps, resolveRunbook, siteHelperRules } from "../src/commands.ts";
-import { policy } from "./helpers.ts";
+import { policy, policyNoWww } from "./helpers.ts";
 
 const resolve = (project: string, id: string, params: Record<string, string>) =>
   resolveRunbook(policy, project, id, params);
@@ -14,9 +14,7 @@ describe("runbook resolution", () => {
       "certonly",
       "--dry-run",
       "--non-interactive",
-      "--webroot",
-      "-w",
-      "/var/www/acme",
+      "--nginx",
       "-d",
       "kervan.uz",
       "-d",
@@ -31,6 +29,31 @@ describe("runbook resolution", () => {
       "--non-interactive",
       "--redirect",
     ]);
+  });
+
+  test("without www (Kervan's first rollout) certbot_nginx_issue uses -d kervan.uz and nothing else", () => {
+    const book = resolveRunbook(policyNoWww, "kervan", "certbot_nginx_issue", {
+      domain: "kervan.uz",
+    });
+    // Dry run and real run use the same authenticator; no www name anywhere.
+    expect(book.dryRun[0]?.args).toEqual([
+      "certonly",
+      "--dry-run",
+      "--non-interactive",
+      "--nginx",
+      "-d",
+      "kervan.uz",
+    ]);
+    expect(book.run[0]?.args).toEqual([
+      "--nginx",
+      "-d",
+      "kervan.uz",
+      "--non-interactive",
+      "--redirect",
+    ]);
+    expect(JSON.stringify(book)).not.toContain("www.");
+    // The helper rule and the certbot rules in sudoers mention no www name either.
+    expect(renderSudoers(policyNoWww)).not.toContain("www.kervan.uz");
   });
 
   test("nginx_site_proxy is medium risk, takes a loopback port, runs the root helper", () => {

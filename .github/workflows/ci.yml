@@ -115,6 +115,16 @@ jobs:
           published = [(n, p["host_ip"], p["published"]) for n, s in services.items() for p in s.get("ports", [])]
           assert all("mem_limit" in s and s.get("restart") == "unless-stopped" and "healthcheck" in s for s in services.values()), "mem_limit, restart and healthcheck are required"
           assert total <= 2048, f"memory budget exceeded: {total} MiB"
-          assert published == [("web", "127.0.0.1", "3000")], f"only web on 127.0.0.1 may publish a port: {published}"
+          assert published == [("web", "127.0.0.1", "3100")], f"only web on 127.0.0.1:3100 (default) may publish a port: {published}"
           print(f"ok: {len(services)} services, {total:.0f} MiB, published {published}")
           '
+          # WEB_HOST_PORT moves the host side only (3000 is Kervan's on the production server); empty = default.
+          for value in 3150 ""; do
+            WEB_HOST_PORT="$value" docker compose -f compose.prod.yaml config --format json | VALUE="$value" python3 -c '
+          import json, os, sys
+          web = json.load(sys.stdin)["services"]["web"]["ports"]
+          want = os.environ["VALUE"] or "3100"
+          assert [(p["host_ip"], p["published"], p["target"]) for p in web] == [("127.0.0.1", want, 3000)], web
+          print("ok: WEB_HOST_PORT=" + repr(os.environ["VALUE"]), "->", want)
+          '
+          done

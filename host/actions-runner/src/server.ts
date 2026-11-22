@@ -166,7 +166,25 @@ export function createRunner(deps: RunnerDeps) {
     return undefined;
   }
 
-  /** certbot_nginx_issue: a vhost must exist for every name and a certificate must be missing. */
+  /**
+   * nginx_site_proxy creates a NEW server block, so it is refused outright when `nginx -T` (every included
+   * file, not only sites-enabled) already has a server_name for the domain. The root helper repeats this.
+   */
+  async function checkNoVhostYet(
+    project: ProjectPolicy,
+    domain: string,
+  ): Promise<string | undefined> {
+    const names = coveredDomains({ ...project, domains: [domain] });
+    const dump = await run(READ_STEPS.nginxDump);
+    if (dump.code !== 0) return "Could not read the nginx configuration (nginx -T)";
+    const served = new Set(parseNginxServers(dump.stdout).flatMap((s) => s.names));
+    const taken = names.filter((n) => served.has(n));
+    return taken.length > 0
+      ? `nginx already has a server block for ${taken.join(", ")}; nginx_site_proxy only creates a missing one`
+      : undefined;
+  }
+
+  /** certbot_nginx_issue: a vhost must exist and a certificate must be missing. */
   async function checkIssuePrerequisite(
     project: ProjectPolicy,
     domain: string,
@@ -180,8 +198,11 @@ export function createRunner(deps: RunnerDeps) {
     const certified = new Set(parseCertbotCertificates(certs.stdout).flatMap((c) => c.domains));
     const served = new Set(parseNginxServers(dump.stdout).flatMap((s) => s.names));
     const missingVhost = names.filter((n) => !served.has(n));
-    if (missingVhost.length > 0) {
+    if (missingVhost.length === names.length) {
       return `No nginx server block for ${missingVhost.join(", ")}; create the vhost first (nginx_site_proxy)`;
+    }
+    if (missingVhost.length > 0) {
+      return `nginx already has a server block for this domain but none names ${missingVhost.join(", ")}; add it to server_name by hand (nginx_site_proxy never touches an existing block) or drop "www" from the policy and scope`;
     }
     if (names.every((n) => certified.has(n))) {
       return "Certificates for these names already exist; use certbot_renew";
@@ -231,6 +252,10 @@ export function createRunner(deps: RunnerDeps) {
     project: ProjectPolicy,
     book: ResolvedRunbook,
   ): Promise<string | undefined> {
+    if (book.runbookId === "nginx_site_proxy" && book.domain) {
+      const taken = await checkNoVhostYet(project, book.domain);
+      if (taken) return taken;
+    }
     const upstream = await verifyUpstream(project, book);
     if (upstream) return upstream;
     if (book.prerequisite && book.domain) return checkIssuePrerequisite(project, book.domain);

@@ -8,12 +8,13 @@ Barcha buyruqlar `root` bilan yoki `sudo` bilan. Qulaylik uchun avval root shell
 
 ```
 Internet ──► nginx (host, 80/443)
-               ├─ incidentpulse.gotrips.cloud ──► 127.0.0.1:3000  (web, Docker)
-               └─ boshqa saytlar (tegmaymiz)
+               ├─ incidentpulse.gotrips.cloud ──► 127.0.0.1:3100  (web, Docker; WEB_HOST_PORT)
+               ├─ kervan.uz  (mavjud conf.d/kervan.conf) ──► localhost:3000  (Kervan, PM2; 3000 BAND)
+               └─ boshqa saytlar (conf.d/*.conf; tegmaymiz)
 
 Docker (compose.prod.yaml, jami ≤ 1752 MiB):
   postgres · redis · docker-proxy · intake · orchestrator · web · debate-verifier · postmortem-crew
-  hech qaysi port tashqariga ochilmaydi, faqat web 127.0.0.1:3000
+  hech qaysi port tashqariga ochilmaydi, faqat web 127.0.0.1:${WEB_HOST_PORT:-3100}
 
 Host (systemd):
   incidentpulse-actions  ──  unix socket /run/incidentpulse/actions.sock
@@ -44,20 +45,22 @@ nginx -v 2>&1
 certbot --version
 certbot plugins 2>&1 | grep -i nginx
 for b in sudo certbot nginx systemctl docker pm2 ss ps tar; do printf '%-10s' "$b"; command -v "$b" || echo "YO'Q"; done
-ss -ltn | grep -E ':(3000|8787|8790|8791)\b' || echo "portlar bo'sh"
-getent hosts incidentpulse.gotrips.cloud
-pm2 jlist | head -c 300; echo
-ls /etc/nginx/sites-enabled/
+ss -ltn | grep -E ':(3000|3100|8787|8790|8791)\b'
+getent hosts incidentpulse.gotrips.cloud kervan.uz
+/root/.nvm/versions/node/v16.17.0/bin/pm2 jlist | head -c 300; echo
+ls /etc/nginx/conf.d/ /etc/nginx/sites-enabled/
+cat /etc/nginx/conf.d/kervan.conf
+nginx -T 2>/dev/null | grep -E '^# configuration file|^\s*server_name'
 ```
 
 **Kutilgan natija**
 - Ubuntu, `free -h` da ~4.5 GB bo'sh, `/var/lib/docker` uchun kamida **8 GB** bo'sh joy (Python imijlari katta).
 - Docker va compose versiyalari chiqadi; `certbot plugins` ichida `nginx` bor (apt bilan o'rnatilgan certbot'da yo'q bo'lsa: `apt install python3-certbot-nginx`; snap certbot'da nginx plagini ichiga kiritilgan).
-- Barcha binar'lar yo'li chiqadi. **Yo'llarni yozib oling**: 6.3-qadamda policy'ga kiradi (ayniqsa `certbot` va `pm2`).
-- `portlar bo'sh` chiqadi (3000/8787/8790/8791 band emas).
-- `getent hosts` bitta IP qaytaradi: **shu serverning IP'si** bo'lishi kerak (yo'q bo'lsa, avval DNS A yozuvini qo'shing).
+- Barcha binar'lar yo'li chiqadi. **Yo'llarni yozib oling**: 6.3-qadamda policy'ga kiradi (ayniqsa `certbot`). `pm2` shu serverda **nvm ostida** (`/root/.nvm/versions/node/v16.17.0/bin/pm2`), shuning uchun `command -v pm2` `YO'Q` deyishi mumkin: bu normal, 6.3-qadam `ip-pm2` wrapper yaratadi.
+- `ss` faqat **`:3000`** ni ko'rsatadi: uni Kervan (node, PM2) ishlatyapti. **3100 bo'sh bo'lishi shart** (web shu portga chiqadi); bo'sh bo'lmasa 4-qadamda `WEB_HOST_PORT` ni boshqa bo'sh portga qo'ying. 8787/8790/8791 host'da umuman ochilmaydi (ichki tarmoq), ular ham chiqmasligi kerak.
+- `getent hosts` har ikkala domen uchun: `incidentpulse.gotrips.cloud` va `kervan.uz` **shu serverning IP'si** bo'lishi kerak (yo'q bo'lsa, avval DNS A yozuvini qo'shing). `www.kervan.uz` tekshirilmaydi: birinchi chiqarishda faqat apex (`"www": false`).
 - `pm2 jlist` ichida `KERVAN` va `KERVAN-REACT` ko'rinadi.
-- `sites-enabled` da faqat `default` (kervan.uz uchun vhost yo'q: muammoning sababi shu).
+- **Kervan vhost'i BOR**, `sites-enabled` da emas, `/etc/nginx/conf.d/kervan.conf` da: `listen 80;`, `server_name kervan.uz;`, `proxy_pass http://localhost:3000/;`. **443 bloki va sertifikat yo'q**, `www.kervan.uz` `server_name` da yo'q. `sites-enabled` da faqat `default`; boshqa saytlar ham `conf.d/*.conf` da. IncidentPulse nginx'ni **faqat `nginx -T` orqali** (barcha `include`lar) o'qiydi, `sites-enabled` ga qarab emas. Shuning uchun Kervan uchun yangi vhost **yaratilmaydi**: yetishmayotgani faqat sertifikat va 443 bloki (12-bo'lim).
 
 ---
 
@@ -122,6 +125,7 @@ DEBATE_SHARED_SECRET=$(openssl rand -hex 32)
 POSTMORTEM_SHARED_SECRET=$(openssl rand -hex 32)
 APPROVAL_HMAC_SECRET=$(openssl rand -hex 32)
 WEB_ADMIN_PASSWORD=$(openssl rand -hex 24)
+WEB_HOST_PORT=3100
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
 INCIDENT_BUDGET_USD=0.50
@@ -141,6 +145,7 @@ Endi qo'lda to'ldiring (`nano /opt/incidentpulse/secrets/.env`):
 - `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`;
 - `TELEGRAM_ALLOWED_USER_IDS`: tasdiq tugmasini bosa oladigan Telegram **user id**(lar), vergul bilan.
 - `WEB_ADMIN_PASSWORD` allaqachon 48 belgilik tasodifiy; uni parol menejeriga saqlang: `grep ^WEB_ADMIN_PASSWORD /opt/incidentpulse/secrets/.env`.
+- `WEB_HOST_PORT=3100`: web konteyneri host'da `127.0.0.1:3100` ga chiqadi (konteyner ichida har doim 3000). **3000 emas**: u Kervan'niki. Qiymat bo'sh yoki yo'q bo'lsa ham default 3100. Boshqa port tanlasangiz, 9-qadamdagi nginx vhost'ning `proxy_pass` porti bilan bir xil bo'lsin. Tekshirish: `ss -ltn | grep ':3100\b' || echo "bo'sh"`.
 
 JSON qiymatlar uchun 5-bo'limga qarang. Hamma qiymatlar to'ldirilganini tekshirish:
 
@@ -166,7 +171,7 @@ cat >> /opt/incidentpulse/secrets/.env <<'EOF'
 PROJECT_DOMAINS_JSON='{"kervan":["kervan.uz"],"codetrail":["codetrail.gotrips.cloud"],"gotrip":["<GOTRIP_DOMENI>"],"findit":["<FINDIT_DOMENI>"],"food-lens":["<FOODLENS_DOMENI>"],"camera-studio":["<CAMERA_STUDIO_DOMENI>"]}'
 PROJECT_CONTAINERS_JSON='{"codetrail":["codetrail"],"food-lens":["food-lens"],"findit":["findit"],"camera-studio":["live-camera-studio"],"gotrip":["gotrip-"]}'
 PROJECT_PM2_JSON='{"kervan":["KERVAN","KERVAN-REACT"]}'
-PROJECT_ACTION_SCOPES_JSON='{"kervan":{"pm2":["KERVAN","KERVAN-REACT"],"nginx":true,"webroot":"/var/www/html","www":true}}'
+PROJECT_ACTION_SCOPES_JSON='{"kervan":{"pm2":["KERVAN","KERVAN-REACT"],"nginx":true,"webroot":"/var/www/html","www":false}}'
 HEALTH_POLL_URLS_JSON=
 EOF
 ```
@@ -178,10 +183,10 @@ Nima nimani cheklaydi:
 | `PROJECT_DOMAINS_JSON` | 6 loyiha domeni. tls/http/dns tekshiruvlari **faqat** shu domenlarga (va ularning subdomenlariga, masalan `www.`). Poller ham shularni `https://<domen>/` deb tekshiradi. Faqat apex yozing (`kervan.uz`), `www.` o'zi qamrab olinadi. |
 | `PROJECT_CONTAINERS_JSON` | `docker ps/logs` ko'ra oladigan konteyner **nom prefikslari**. `gotrip-` = `gotrip-*`. |
 | `PROJECT_PM2_JSON` | `pm2_list`, `pm2_logs`, `pm2_ports` ko'ra oladigan PM2 ilovalari: faqat `KERVAN`, `KERVAN-REACT`. |
-| `PROJECT_ACTION_SCOPES_JSON` | Tasdiq bilan **o'zgartirish** mumkin bo'lgan narsa. Birinchi chiqarishda **faqat Kervan**: PM2 restart, nginx reload, `nginx_site_proxy`, `certbot_*`. Boshqa loyihalar faqat o'qiladi (qo'shish uchun bu yerga va 6.3 policy'ga aniq nomlarini yozing). `www:true`: sertifikat va vhost `kervan.uz` + `www.kervan.uz` ni qamraydi. |
+| `PROJECT_ACTION_SCOPES_JSON` | Tasdiq bilan **o'zgartirish** mumkin bo'lgan narsa. Birinchi chiqarishda **faqat Kervan**: PM2 restart, nginx reload, `certbot_*`, `nginx_site_proxy`. Boshqa loyihalar faqat o'qiladi (qo'shish uchun bu yerga va 6.3 policy'ga aniq nomlarini yozing). **`www:false`** (policy, scope va 12-bo'lim bir xil): `www.kervan.uz` DNS'da ham, nginx `server_name` da ham yo'q, shuning uchun sertifikat faqat `-d kervan.uz` uchun. `www:true` qo'yilsa `www.kervan.uz` ham so'raladi va Let's Encrypt DNS'siz rad etadi. `nginx_site_proxy` Kervan uchun scope'da ruxsat etilgan, lekin Kervan vhost'i allaqachon bor: u **taklif qilinmaydi** va runner hamda root yordamchi `nginx -T` da `server_name` borligini ko'rsa qat'iy rad etadi (ikkinchi blok yaratilmaydi). |
 | `HEALTH_POLL_URLS_JSON` | Bo'sh = `https://<domen>/`. Aniq health URL kerak bo'lsa: `'{"gotrip":["https://<domen>/api/health"]}'` (URL host'i loyiha domenlari ichida bo'lishi shart, aks holda start bo'lmaydi). |
 
-`webroot` (`/var/www/html`) nginx `/.well-known/acme-challenge/` uchun beradigan papka bo'lishi kerak; Ubuntu'da nginx default papkasi shu. Tekshirish: `ls -ld /var/www/html`.
+`webroot` (`/var/www/html`) faqat `nginx_site_proxy` yaratadigan **yangi** vhost'larning `/.well-known/acme-challenge/` joyi uchun ishlatiladi (Ubuntu'da nginx default papkasi shu; tekshirish: `ls -ld /var/www/html`). Kervan sertifikati webroot'ga bog'liq emas: `certbot_nginx_issue` ham dry-run'da, ham real ishda nginx autentifikatoridan foydalanadi.
 
 Poller qoidasi: URL `5xx`, ulanish xatosi yoki TLS xatosi bersa va 10 soniyadan keyin qayta tekshiruv ham xato bersa **Down**. `4xx` (masalan 401/404) ilovaning javobi, nosozlik emas. Tergov faqat holat **o'zgarganda** boshlanadi (ok→down, down→ok yoki birinchi ko'rishda down). O'sha holatda qolgan loyiha token ham, xabar ham sarflamaydi.
 
@@ -235,6 +240,16 @@ ls /opt/incidentpulse/actions-runner/src
 
 Policy (host'ning o'z allowlist'i):
 
+Avval `pm2` uchun wrapper. Bu serverda `pm2` nvm ostida, `sudo` esa `node` ni topa olmaydi (`PATH`); wrapper `PATH` ni o'zi qo'yadi, tizimga tegmaydi. sudoers aynan shu yo'lni yozadi:
+
+```bash
+printf '#!/bin/sh\nexport PATH="/root/.nvm/versions/node/v16.17.0/bin:$PATH"\nexec /root/.nvm/versions/node/v16.17.0/bin/pm2 "$@"\n' > /usr/local/sbin/ip-pm2
+chown root:root /usr/local/sbin/ip-pm2 && chmod 755 /usr/local/sbin/ip-pm2
+sudo -n -H /usr/local/sbin/ip-pm2 jlist | head -c 200; echo
+```
+
+**Kutilgan natija**: `[{"name":"KERVAN",...` (PM2 JSON ro'yxati). Keyin policy:
+
 ```bash
 install -d -m 0755 /etc/incidentpulse
 cp /opt/incidentpulse/app/deploy/actions-policy.example.json /etc/incidentpulse/actions-policy.json
@@ -243,7 +258,7 @@ for b in certbot nginx systemctl docker pm2 ss ps tar; do printf '%-10s' "$b"; c
 nano /etc/incidentpulse/actions-policy.json
 ```
 
-`bins` bo'limini 1-qadamdagi **haqiqiy yo'llar** bilan to'ldiring (faqat default'dan farq qilganlarini: masalan `"certbot": "/snap/bin/certbot"`, `"pm2": "/usr/local/bin/pm2"`). `sudo` sudoers aynan shu yo'llarni yozadi. `projects.kervan` ni tekshiring: `domains`, `www`, `pm2`, `webroot` 5-bo'limdagi bilan bir xil bo'lsin.
+Namuna bu server uchun allaqachon to'ldirilgan: `"pm2": "/usr/local/sbin/ip-pm2"` va Kervan uchun `"www": false`. `bins` ni 1-qadamdagi **haqiqiy yo'llar** bilan solishtiring va faqat default'dan farq qilganini qo'shing (masalan `"certbot": "/snap/bin/certbot"`). `sudo` sudoers aynan shu yo'llarni yozadi. `projects.kervan` ni tekshiring: `domains`, `www` (**false**), `pm2`, `webroot` 5-bo'limdagi bilan bir xil bo'lsin.
 
 Policy to'g'riligini va sudoers'ni generatsiya qilib ko'ring:
 
@@ -251,7 +266,7 @@ Policy to'g'riligini va sudoers'ni generatsiya qilib ko'ring:
 /opt/incidentpulse/node/bin/node /opt/incidentpulse/actions-runner/scripts/render-sudoers.ts /etc/incidentpulse/actions-policy.json | head -30
 ```
 
-**Kutilgan natija**: `# NN exact commands...` sarlavhasi va `/usr/bin/pm2 restart KERVAN`, `/usr/sbin/nginx -T`, `/usr/bin/certbot certificates` kabi qatorlar. Policy xato bo'lsa `PolicyError: ...` chiqadi (qaysi kalit xato ekanini aytadi).
+**Kutilgan natija**: `# NN exact commands...` sarlavhasi va `/usr/local/sbin/ip-pm2 restart KERVAN`, `/usr/sbin/nginx -T`, `/usr/bin/certbot certificates`, `/usr/bin/certbot --nginx -d kervan.uz --non-interactive --redirect` kabi qatorlar (`www.kervan.uz` **yo'q**). Policy xato bo'lsa `PolicyError: ...` chiqadi (qaysi kalit xato ekanini aytadi).
 
 ### 6.4 sudoers (faqat aniq buyruqlar)
 
@@ -306,19 +321,12 @@ curl -s --unix-socket $S -H 'content-type: application/json' -d '{"op":"pm2_logs
 **Kutilgan natija**
 - `{"ok":true,"projects":1}`
 - `pm2_jlist`: faqat `KERVAN` va `KERVAN-REACT` (boshqa PM2 ilovalari ko'rinmaydi), `status:"online"`.
-- `pm2_ports`: har bir ilova uchun `ports:[...]` (masalan `{"app":"KERVAN","ports":[3000]}`). **Shu Kervan portlarini aniqlash usuli** (12-bo'limga qarang).
-- `nginx_config`: `servers:[]` (kervan.uz uchun server blok yo'q; boshqa saytlar ko'rinmaydi).
+- `pm2_ports`: har bir ilova uchun `ports:[...]` (masalan `{"app":"KERVAN","ports":[3000]}`). Portlarni aniqlash usuli 12-bo'limda.
+- `nginx_config`: `servers:[{"names":["kervan.uz"],"listens":["80"],"ssl":false,"proxyPass":["http://localhost:3000/"]}]`: blok `conf.d/kervan.conf` dan, `nginx -T` orqali topiladi (boshqa saytlar ko'rinmaydi). `servers:[]` chiqsa, `nginx -T` kervan.uz'ni ko'rmayapti: 1-qadamdagi `cat /etc/nginx/conf.d/kervan.conf` ni tekshiring.
 - `cert_list`: `certificates:[]` (kervan.uz sertifikati yo'q; boshqa domenlar sertifikatlari ko'rinmaydi).
 - `pm2_logs` bilan ruxsatsiz ilova: `{"ok":false,"error":"pm2 app is not in the policy"}`.
 
-Agar `pm2_jlist` `PM2_FAILED` bersa: `sudo -n -H /usr/bin/pm2 jlist` ni qo'lda sinang. `pm2` nvm ostida (`/root/.nvm/...`) bo'lsa, sudo'ning `PATH`i `node`ni topolmaydi. Yechim (tizimga tegmaydi): `/usr/local/sbin/ip-pm2` yarating:
-
-```bash
-printf '#!/bin/sh\nexport PATH="/root/.nvm/versions/node/vXX.Y.Z/bin:$PATH"\nexec /root/.nvm/versions/node/vXX.Y.Z/bin/pm2 "$@"\n' > /usr/local/sbin/ip-pm2
-chmod 755 /usr/local/sbin/ip-pm2
-```
-
-keyin policy'da `"pm2": "/usr/local/sbin/ip-pm2"`, 6.4 (sudoers) va `systemctl restart incidentpulse-actions` ni qayta bajaring.
+Agar `pm2_jlist` `PM2_FAILED` bersa: `sudo -n -H /usr/local/sbin/ip-pm2 jlist` ni qo'lda sinang. Xato `node: not found` bo'lsa wrapper'dagi nvm yo'li (`/root/.nvm/versions/node/v16.17.0/bin`) noto'g'ri; xato `a password is required` bo'lsa policy'dagi `bins.pm2` sudoers'dagidan farq qiladi: 6.3 va 6.4 ni qayta bajaring, keyin `systemctl restart incidentpulse-actions`.
 
 Token bilan himoyani tekshirish (tokensiz tasdiqlangan amal bajarilmasligi kerak):
 
@@ -373,25 +381,28 @@ Xotira va portlar:
 
 ```bash
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
-ss -ltnp | grep -E ':(3000|5432|6379|8787|8790|8791|2375)\b'
+ss -ltnp | grep -E ':(3000|3100|5432|6379|8787|8790|8791|2375)\b'
 free -h
 ```
 
-**Kutilgan natija**: har bir konteyner o'z limitidan past (`MemPerc` < 85%); `ss` faqat `127.0.0.1:3000` ni ko'rsatadi (postgres/redis/intake/Python/proxy tashqarida ko'rinmaydi); `free -h` da host RAM yetarli.
+**Kutilgan natija**: har bir konteyner o'z limitidan past (`MemPerc` < 85%); `ss` ikkita qator ko'rsatadi: **`127.0.0.1:3100`** (IncidentPulse web, `docker-proxy` jarayoni) va Kervan'ning o'z **`:3000`** (node, PM2; unga tegmadik). Postgres/redis/intake/Python/proxy tashqarida ko'rinmaydi; `free -h` da host RAM yetarli.
 
 ---
 
 ## 9. Web: nginx vhost + certbot
 
 ```bash
+grep -n proxy_pass /opt/incidentpulse/app/deploy/nginx/incidentpulse.gotrips.cloud.conf     # http://127.0.0.1:3100 (WEB_HOST_PORT bilan bir xil bo'lsin)
 cp /opt/incidentpulse/app/deploy/nginx/incidentpulse.gotrips.cloud.conf /etc/nginx/sites-available/incidentpulse.gotrips.cloud.conf
 ln -s /etc/nginx/sites-available/incidentpulse.gotrips.cloud.conf /etc/nginx/sites-enabled/incidentpulse.gotrips.cloud.conf
 nginx -t
 systemctl reload nginx
-curl -sI -H 'Host: incidentpulse.gotrips.cloud' http://127.0.0.1/login | head -3
+curl -sI http://127.0.0.1:3100/login | head -1                                    # web to'g'ridan-to'g'ri
+curl -sI -H 'Host: incidentpulse.gotrips.cloud' http://127.0.0.1/login | head -3   # nginx orqali
+curl -sI -H 'Host: kervan.uz' http://127.0.0.1/ | head -1                          # Kervan o'zgarmagan bo'lishi kerak
 ```
 
-**Kutilgan natija**: `nginx: configuration file ... test is successful`; `HTTP/1.1 200 OK` (yoki web hali ishga tushmagan bo'lsa `502`: `$COMPOSE ps` ni tekshiring).
+**Kutilgan natija**: `nginx: configuration file ... test is successful`; `HTTP/1.1 200 OK` (yoki web hali ishga tushmagan bo'lsa `502`: `$COMPOSE ps` ni tekshiring). `WEB_HOST_PORT` ni 3100 dan boshqa qilgan bo'lsangiz, `sites-available` dagi nusxada `proxy_pass` portini avval tuzating. Uchinchi buyruq Kervan javobini beradi (u bilan hech narsa o'zgarmadi: bu vhost faqat `incidentpulse.gotrips.cloud` ga javob beradi).
 
 Sertifikat (DNS A yozuvi shu serverga qaragan bo'lishi shart):
 
@@ -478,6 +489,12 @@ nginx -t && systemctl reload nginx
 ```
 (`certbot --nginx` vhost'ga TLS qo'shgan bo'lsa, sertifikatni ham olib tashlash: `certbot delete --cert-name kervan.uz`.)
 
+**Kervan'ning `certbot_nginx_issue` natijasini qaytarish.** Kervan vhost'ini IncidentPulse yaratmaydi: `certbot --nginx` mavjud `/etc/nginx/conf.d/kervan.conf` ni o'zi tahrirlaydi (443 bloki, sertifikat yo'llari, 80→443 redirect; qo'shilgan qatorlarda `# managed by Certbot`). 12-bo'limdagi qo'lda olingan zaxira bilan qaytariladi:
+```bash
+certbot delete --cert-name kervan.uz
+tar -xzf /root/nginx-before-incidentpulse-<SANA>.tar.gz -C /etc && nginx -t && systemctl reload nginx
+```
+
 **Hammasini olib tashlash**
 ```bash
 $COMPOSE down                       # ma'lumotlar qoladi; o'chirish uchun: down -v
@@ -493,63 +510,78 @@ swapoff /swapfile && sed -i '\#^/swapfile #d' /etc/fstab && rm /swapfile        
 
 ## 12. Kervan'ni tuzatish rejasi
 
-**Muammo**: `kervan.uz` DNS'i serverga qaraydi, lekin `sites-enabled` da faqat `default` bor. nginx `kervan.uz` so'rovlarini default server bilan javoblaydi: boshqa domen uchun sertifikat (TLS hostname mismatch, masalan `codetrail.gotrips.cloud`) yoki umuman javob yo'q. Sayt PM2 ostida ishlayapti (`KERVAN`, `KERVAN-REACT`), faqat nginx unga yo'l ko'rsatmaydi.
+**Muammo (serverdan olingan haqiqiy holat)**: `kervan.uz` DNS'i shu serverga qaraydi va `/etc/nginx/conf.d/kervan.conf` da vhost **bor** (`listen 80`, `server_name kervan.uz`, `proxy_pass http://localhost:3000/`), lekin **443 bloki va sertifikat yo'q**. `https://kervan.uz/` ga kirganda nginx 443 da `kervan.uz` uchun blok topa olmaydi: boshqa saytning default serveri javob beradi (boshqa domen sertifikati, ya'ni TLS hostname mismatch) yoki ulanish rad etiladi. Sayt PM2 ostida ishlayapti (`KERVAN`, `KERVAN-REACT`, port 3000), `http://` ishlaydi. Boshqa saytlar ham `/etc/nginx/conf.d/*.conf` da; ularga tegilmaydi.
+
+**Yechim**: yangi vhost **kerak emas**. Kerak narsa: mavjud blokka `listen 443 ssl` + sertifikat + 80→443 redirect. Buni `certbot --nginx -d kervan.uz --redirect` qiladi, va u aynan **bitta** tasdiqlanadigan runbook: `certbot_nginx_issue`. Birinchi chiqarishda `www.kervan.uz` yo'q (DNS ham, `server_name` ham), shuning uchun policy, scope va bu bo'lim **`"www": false`**: faqat `-d kervan.uz`.
 
 **Oldindan shartlar** (bir marta, qo'lda):
 ```bash
-getent hosts kervan.uz www.kervan.uz       # ikkalasi ham shu serverning IP'si (www bo'lmasa: policy va scope'dan "www" ni olib tashlang)
-ls /etc/letsencrypt/accounts/ 2>/dev/null  # certbot akkaunti bor (yo'q bo'lsa: certbot register --agree-tos -m <email>)
-certbot plugins 2>&1 | grep -i nginx       # nginx plagini bor
-curl -sI http://127.0.0.1:80 -H 'Host: kervan.uz' | head -1     # default server javobi
+getent hosts kervan.uz                        # shu serverning IP'si (www.kervan.uz kerak emas)
+cat /etc/nginx/conf.d/kervan.conf             # 1-qadamdagidek: faqat listen 80, server_name kervan.uz
+nginx -T 2>/dev/null | grep -nE 'server_name[^;]*kervan'   # aynan BITTA qator (ikkinchi blok bo'lmasin)
+ls /etc/letsencrypt/accounts/ 2>/dev/null     # certbot akkaunti bor (yo'q bo'lsa: certbot register --agree-tos -m <email>)
+certbot plugins 2>&1 | grep -i nginx          # nginx plagini bor
+ss -ltn | grep -E ':(80|443)\b'               # nginx ikkala portda tinglaydi; ufw/firewall'da 80 va 443 ochiq
+curl -sI http://127.0.0.1 -H 'Host: kervan.uz' | head -1       # Kervan javobi (http)
+( umask 077; tar -czf /root/nginx-before-incidentpulse-$(date +%F).tar.gz -C /etc nginx )   # zaxira (qaytarish: 11-bo'lim)
 ```
+`certbot_nginx_issue` `/etc/nginx` zaxirasini o'zi olmaydi (zaxirani faqat `nginx_site_proxy` yordamchisi oladi): `certbot --nginx` konfiguratsiyani xatoda o'zi qaytaradi, lekin yuqoridagi qo'lda zaxira ikkinchi himoya.
 
-**Avtomatik zanjir va har bir bosqichda nima ro'y beradi:**
+**Zanjir: bitta tasdiq.**
 
 | # | Kim | Nima | Siz ko'radigan narsa |
 |---|---|---|---|
 | 1 | Poller (≤15 daq) | `https://kervan.uz/` ga GET → TLS/ulanish xatosi → 10 s dan keyin qayta tekshiruv → **Down** (holat o'zgardi) | `health poll finished ... changes=1` |
-| 2 | Orchestrator | Qat'iy (LLM'siz) probe: `http_probe`, `tls_inspect`, `pm2_list` → kategoriya `tls`; kesh yo'q → tergov | – |
-| 3 | Infra mutaxassisi | `nginx_config` → `kervan.uz vhost=missing`; `cert_list` → `kervan.uz cert=missing`; `tls_inspect` → `hostnameMatch=false` | Dalil qatorlari |
-| 4 | Logs mutaxassisi | `pm2_list` (ikkalasi `online`), `pm2_ports` → `KERVAN ports=…; KERVAN-REACT ports=…` | – |
-| 5 | Debate verifier | Gipoteza "nginx'da kervan.uz vhost'i yo'q, default server javob beryapti" ishonch ≥ 0.7 | – |
-| 6 | Taklif | Ishonchli (LLM'siz) **inventar** (runner): vhost yo'q → faqat `nginx_site_proxy` taklif qilinadi; `upstream` ro'yxati runner topgan portlardan. Dry-run: runner portni tekshiradi, yordamchi `check` rejimida | **Telegram**: `Taklif: nginx_site_proxy(kervan.uz, 127.0.0.1:PORT) · medium · dry-run ✅` + [✅ Bajar] [❌ Rad et] [🔍 Batafsil] |
+| 2 | Orchestrator | Qat'iy (LLM'siz) probe: `http_probe`, `tls_inspect`, `pm2_list` → tergov (kesh yo'q) | – |
+| 3 | Infra mutaxassisi | `nginx_config` (`nginx -T`, barcha include'lar) → `kervan.uz vhost=present listen=80 ssl=false proxy=http://localhost:3000/`; `cert_list` → `kervan.uz cert=missing`; `tls_inspect` → `hostnameMatch=false` yoki ulanish xatosi | Dalil qatorlari |
+| 4 | Logs mutaxassisi | `pm2_list` (ikkalasi `online`), `pm2_ports` → `KERVAN ports=3000…` | – |
+| 5 | Debate verifier | Gipoteza "kervan.uz uchun 443 blok va sertifikat yo'q" ishonch ≥ 0.7 | – |
+| 6 | Taklif | Ishonchli (LLM'siz) **inventar** (runner, `nginx -T` + `certbot certificates`): vhost **bor**, sertifikat **yo'q** → faqat `certbot_nginx_issue(kervan.uz)`. **`nginx_site_proxy` taklif qilinmaydi** (runner va root yordamchi ham `server_name` bor bo'lsa qat'iy rad etadi). Dry-run: runner inventarni qayta tekshiradi, keyin `certbot certonly --dry-run --non-interactive --nginx -d kervan.uz` (Let's Encrypt staging) | **Telegram**: `Taklif: certbot_nginx_issue(kervan.uz) · medium · dry-run ✅` + [✅ Bajar] [❌ Rad et] [🔍 Batafsil] |
 | 7 | **Siz** | `🔍 Batafsil` bilan dalil va dry-run'ni o'qing, keyin **✅ Bajar** | `Tasdiqlandi.` |
-| 8 | Runner | Token (HMAC, 15 daq, bir martalik) tekshiriladi → `/etc/nginx` backup → vhost yoziladi → `nginx -t` → reload → `Host: kervan.uz` bilan HTTP tekshiruv; **istalgan xatoda avtomatik rollback** | Natija `Batafsil` da; `/var/backups/incidentpulse/nginx-….tar.gz` |
-| 9 | Recovery tekshiruvi | `https://kervan.uz/` hali ham TLS xatosi (sertifikat yo'q) → tiklanish tasdiqlanmadi → graph yangi taklifga qaytadi (2-urinish) | – |
-| 10 | Taklif #2 | Inventar: **vhost bor, sertifikat yo'q** → faqat `certbot_nginx_issue(kervan.uz)` (`-d kervan.uz -d www.kervan.uz`). Dry-run: `certbot certonly --dry-run --webroot -w /var/www/html …` | **Telegram**: `Taklif: certbot_nginx_issue(kervan.uz) · medium · dry-run ✅` |
-| 11 | **Siz** | **✅ Bajar** | `Tasdiqlandi.` |
-| 12 | Runner | Token tekshiruvi → `certbot --nginx -d kervan.uz -d www.kervan.uz --non-interactive --redirect` → `nginx -t` | – |
-| 13 | Recovery tekshiruvi | `https://kervan.uz/` → 200 → **recovered** | **Telegram: 🟢 tiklandi**, postmortem havolasi |
-| 14 | Postmortem crew | Researcher → Reviewer → Writer, web'da `/postmortems/<id>` | Taxminan $0.004 |
+| 8 | Runner | Token (HMAC, 15 daq, bir martalik) → inventar yana tekshiriladi → `certbot --nginx -d kervan.uz --non-interactive --redirect` (mavjud `conf.d/kervan.conf` blokiga 443 + sertifikat, va 80→443 redirect) → `nginx -t` | Natija `Batafsil` da |
+| 9 | Recovery tekshiruvi | `https://kervan.uz/` → 200 → **recovered** | **Telegram: 🟢 tiklandi**, postmortem havolasi |
+| 10 | Postmortem crew | Researcher → Reviewer → Writer, web'da `/postmortems/<id>` | – |
 
-Jami xarajat odatda **$0.02–0.04** (haftalik $0.50 chegarasi ichida). Tasdiqsiz hech narsa o'zgarmaydi; har bir taklif 60 daqiqada muddati o'tadi, token esa 15 daqiqa amal qiladi.
+Bitta tergov, bitta tasdiq: oldingi reja (vhost yaratish + sertifikat, ikki tasdiq) endi kerak emas. Xarajat bir tergov va bir postmortem; RESUME.md dagi sandbox o'lchovlari bo'yicha ~$0.01–0.02 (haqiqiy serverda hali o'lchanmagan; haftalik $0.50 chegarasi ichida). Tasdiqsiz hech narsa o'zgarmaydi; taklif 60 daqiqada muddati o'tadi, token 15 daqiqa amal qiladi.
+
+**Tekshiruv** (zanjirdan keyin yoki qo'lda):
+```bash
+curl -sI https://kervan.uz/ | head -3                       # HTTP/2 200
+curl -sI http://kervan.uz/ | head -3                        # 301 -> https://kervan.uz/
+certbot certificates | grep -A3 'Certificate Name: kervan.uz'
+grep -n 'managed by Certbot' /etc/nginx/conf.d/kervan.conf   # certbot qo'shgan qatorlar
+curl -sI https://incidentpulse.gotrips.cloud/login | head -1    # boshqa saytlar buzilmagan
+```
 
 ### KERVAN va KERVAN-REACT portlarini qanday aniqlaymiz
 
-Tizim portni **taxmin qilmaydi va modelga topshirmaydi**. Host runner (`pm2_ports`, faqat `KERVAN` va `KERVAN-REACT` uchun) quyidagicha hisoblaydi:
+Hozirgi zanjirda Kervan uchun `upstream` kerak emas (vhost allaqachon bor va `localhost:3000` ga yo'naltirilgan). Port aniqlash baribir dalil sifatida (`pm2_ports`) va kelajakda `nginx_site_proxy` kerak bo'lgan boshqa loyiha uchun ishlaydi. Tizim portni **taxmin qilmaydi va modelga topshirmaydi**. Host runner (`pm2_ports`, faqat policy'dagi PM2 ilovalari uchun) quyidagicha hisoblaydi:
 
 1. `pm2 jlist` → har bir ilovaning `pid` si va holati (faqat `online` ilovalar port egasi bo'ladi).
 2. `ps -eo pid=,ppid=` → shu `pid` ning **barcha avlodlari** (PM2 ko'pincha `npm start`/`sh -c` ni ishga tushiradi, haqiqiy server esa uning bolasi).
 3. `ss -H -ltnp` → ro'yxatdagi TCP tinglovchilar. Egasi shu pid-daraxtda bo'lgan va `127.0.0.1` orqali yetib boriladigan (`0.0.0.0`, `127.0.0.1`, `[::]`) portlar ilovaning portlari.
-4. Natija `127.0.0.1:PORT` ro'yxati: bu **taklif qilinadigan `upstream` qiymatlarining to'liq ro'yxati**. Model boshqa port tanlay olmaydi (tanlasa taklif rad etiladi). Bir nechta bo'lsa, front-end ilova (`KERVAN-REACT`) tanlanadi, bittasi bo'lsa o'sha.
+4. Natija `127.0.0.1:PORT` ro'yxati: `nginx_site_proxy` taklif qilinganda **`upstream` qiymatlarining to'liq ro'yxati**. Model boshqa port tanlay olmaydi (tanlasa taklif rad etiladi).
 5. Runner dry-run'da va bajarishdan oldin **yana** tekshiradi: port aynan shu loyihaning PM2 ilovasiga tegishli va `GET http://127.0.0.1:PORT/` `5xx` bermayapti. Yordamchi (root) esa portda haqiqatan tinglovchi borligini va `127.0.0.1` ekanini qayta tekshiradi.
 
 Qo'lda tasdiqlash (har ikkala ilova uchun):
 ```bash
-pm2 jlist | grep -E '"name":"KERVAN(-REACT)?"|"pid":' | head
-PIDS=$(pm2 pid KERVAN; pm2 pid KERVAN-REACT)
+P=/root/.nvm/versions/node/v16.17.0/bin/pm2
+$P jlist | grep -E '"name":"KERVAN(-REACT)?"|"pid":' | head
+PIDS=$($P pid KERVAN; $P pid KERVAN-REACT)
 ss -H -ltnp | grep -E "pid=($(echo $PIDS | tr ' ' '|'))\b"      # to'g'ridan-to'g'ri egasi bo'lsa
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<PORT>/
-curl -s http://127.0.0.1:<PORT>/ | head -c 300                   # qaysi biri HTML beradi (front-end), qaysi biri API
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+curl -s http://127.0.0.1:3000/ | head -c 300
 ```
 (`ss` da bola jarayon pid'i chiqsa, `pstree -p <PM2_PID>` bilan bog'lang; runner buni avtomatik qiladi.)
 
-**Cheklov**: `nginx_site_proxy` bitta `upstream` ga proksilaydi (spetsifikatsiya: `nginx_site_proxy(domain, upstream)`). Agar sayt `/` ni `KERVAN-REACT` dan, `/api` ni `KERVAN` dan olishi kerak bo'lsa, avtomatik bosqichdan keyin vhost'ga qo'lda `location /api/ { proxy_pass http://127.0.0.1:<API_PORT>; }` qo'shing (`nginx -t && systemctl reload nginx`). Fayl `# managed-by: incidentpulse` belgisi bilan boshlanadi.
+**Cheklov**: `nginx_site_proxy` faqat vhost **yo'q** domen uchun va bitta `upstream` ga proksilaydi. Mavjud blokni (Kervan'niki kabi) u hech qachon o'zgartirmaydi.
 
 **Agar zanjir to'xtasa** (hech narsa buzilmaydi, escalate qiladi):
-- Dry-run `Port … is not a listening port of this project's pm2 apps` → pm2 ilova `online` emas yoki port ruxsat etilgan ilovaniki emas: `pm2 jlist`, 6.6.
-- Dry-run `certbot ... --dry-run` xato → DNS (`www`), 80-port firewall, yoki webroot: `curl -s http://kervan.uz/.well-known/acme-challenge/x` 404 bo'lishi kerak (ilovaniki emas, nginx'ning); `www` DNS yo'q bo'lsa `"www"` ni policy va scope'dan olib tashlang.
-- Rollback xabari (`ROLLED BACK (...)`) → sabab shu qatorda; `/etc/nginx` tegmagan holda qaytgan (backup yo'li ham yozilgan).
+- Dry-run `nginx already has a server block … but none names www.kervan.uz` → policy yoki scope'da `"www": true` qolib ketgan: ikkalasida `false` qiling (6.3, 5-bo'lim), runner'ni qayta ishga tushiring va orchestrator'ni qayta yarating (`$COMPOSE up -d --force-recreate orchestrator`).
+- Dry-run `No nginx server block for kervan.uz; create the vhost first` → `nginx -T` `kervan.uz` ni ko'rmayapti (blok include qilinmagan?): `nginx -T | grep -n server_name`. `nginx_site_proxy` taklif qilinganini ko'rsangiz, ya'ni inventar vhost yo'q deb hisoblayapti: shu buyruq natijasini va 6.6 dagi `nginx_config` ni solishtiring.
+- Dry-run `Certificates for these names already exist; use certbot_renew` → sertifikat allaqachon bor (`certbot certificates`); muammo boshqa joyda.
+- Dry-run `certbot ... --dry-run` xato → DNS A yozuvi shu serverga qaramaydi, 80-port firewall'da yopiq yoki Let's Encrypt staging limiti: `/var/log/letsencrypt/letsencrypt.log`. Dry-run webroot emas, nginx autentifikatori bilan ishlaydi (bu vaqtda certbot `conf.d/kervan.conf` ga vaqtincha challenge location qo'shib, nginx'ni reload qiladi va keyin qaytaradi; Kervan vhost'ida ACME location yo'q, shuning uchun webroot usuli ishlamas edi).
+- Bajarishda xato → certbot konfiguratsiyani o'zi qaytaradi; `nginx -t` ni tekshiring, kerak bo'lsa 11-bo'limdagi qo'lda zaxiradan tiklang.
 - Telegram'da tugma bosilmasa: 60 daqiqadan keyin `tasdiqlash muddati tugadi, inson ko'rigi kutilmoqda`; `/investigate kervan` bilan qayta boshlang.
 
 ---
@@ -565,4 +597,5 @@ curl -s http://127.0.0.1:<PORT>/ | head -c 300                   # qaysi biri HT
 | `pm2_*` `PM2_FAILED` | 6.6 oxiridagi `ip-pm2` yechimi. |
 | `sudo: a password is required` runner jurnalida | policy `bins` yo'li sudoers'dagidan farq qiladi: 6.3 va 6.4 ni qayta bajaring. |
 | `docker compose ps` da `docker-proxy` unhealthy | Imij tegi mavjud emas bo'lsa `docker pull tecnativa/docker-socket-proxy:0.3.0`; boshqa tegni `compose.prod.yaml` da yangilang. |
-| Web `502` | `$COMPOSE ps web`, `curl -sI http://127.0.0.1:3000/login`. |
+| Web `502` | `$COMPOSE ps web`, `curl -sI http://127.0.0.1:3100/login` (yoki `WEB_HOST_PORT` dagi port). nginx `proxy_pass` porti shu portga teng bo'lishi shart. |
+| `$COMPOSE up` da `bind: address already in use` (web) | Host'dagi `WEB_HOST_PORT` (default 3100) band: `ss -ltnp \| grep ':3100\b'`. Boshqa bo'sh portni `.env` ga `WEB_HOST_PORT=<port>` deb yozing, nginx vhost'dagi `proxy_pass` ni o'sha portga o'zgartiring, `$COMPOSE up -d web && nginx -t && systemctl reload nginx`. **3000 ni tanlamang**: u Kervan'niki. |

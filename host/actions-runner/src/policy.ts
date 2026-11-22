@@ -46,7 +46,7 @@ export interface ProjectPolicy {
   pm2: string[];
   /** nginx_reload / nginx_site_proxy allowed for this project. */
   nginx: boolean;
-  /** ACME webroot used by the staging dry-run and by the vhost template. */
+  /** ACME webroot written into vhosts that nginx_site_proxy creates (certbot_nginx_issue uses the nginx authenticator). */
   webroot?: string;
   compose?: { name: string; file: string };
 }
