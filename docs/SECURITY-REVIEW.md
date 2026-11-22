@@ -84,7 +84,7 @@ Status: deferred (single-admin VPS)
 
 ### M6. HTTP va TLS allowlist’i ulanish IP’sini cheklamaydi
 
-Status: deferred (single-admin VPS)
+Status: fixed (`f758921`)
 
 **Shart va ta’sir.** HTTP redirect’larning har bir bosqichida hostname va port tekshiriladi. Shu tekshiruv ruxsatli subdomenlarni ham qamraydi. HTTP va TLS klientlari DNS natijasi yoki haqiqiy ulanish IP’sini private, loopback va link-local manzillarga nisbatan tekshirmaydi. Ruxsatli DNS nomini yoki tegishli redirect’ni boshqara oladigan tomon orchestrator tarmog‘idan ichki HTTP GET yoki TLS handshake yuzaga kelishiga sabab bo‘lishi mumkin. Oddiy `http_probe` body’ni bekor qiladi, lekin status va redirect metama’lumotlari chiqadi. Deep health body’ni limit bilan o‘qiydi va URL topilmalarini xabarga uzatadi.
 
@@ -118,7 +118,7 @@ Status: fixed (`f72ea26`)
 
 ### L1. Logout avval olingan session’ni serverda bekor qilmaydi
 
-Status: deferred (single-admin VPS)
+Status: fixed (`f758921`)
 
 **Shart va ta’sir.** Session stateless HMAC bilan imzolanadi va sakkiz soat amal qiladi. Logout cookie’ni faqat joriy brauzerdan o‘chiradi. Agar session nusxasi oldin sizib chiqqan bo‘lsa, u expiry yoki admin paroli almashishigacha dashboard va approval API uchun amal qiladi. Ushbu topilma session o‘g‘irlanishining alohida yo‘lini ko‘rsatmaydi.
 
